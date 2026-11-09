@@ -1,5 +1,10 @@
 # pad2touch — use a gamepad with touch-only Android games in Waydroid
 
+> **Status: superseded on the author's machine.** He ended up using an existing Android overlay
+> mapper — **Mantis Gamepad Pro** (Play Store) — because it gives a per-game control editor without
+> hand-editing coordinates. This project still makes sense when you can't (or won't) run an overlay
+> app, or when you want deterministic host-side input. Read the rest as the "no-app" route.
+
 A virtual touchscreen for Waydroid, driven by a physical controller.
 
 Waydroid forwards keyboard and pointer from the host, and it will happily pass a controller
