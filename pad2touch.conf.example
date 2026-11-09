@@ -1,0 +1,55 @@
+# pad2touch configuration — copy to /etc/pad2touch.conf
+# Screen 2560x1396 (Waydroid default surface). Recalibrate for your game/resolution.
+# Left stick = movement, right stick = camera, buttons = taps at these positions.
+
+# pad2touch — Switch controller layout mapped onto the mobile touch HUD.
+# Screen 2560x1396. Switch mapping (per in-game defaults):
+#   A = basic attack      B = cancel move (no touch equivalent -> disabled)
+#   X = score             Y = battle items
+#   R = Move 1            ZR = Move 2        ZL = Unite Move
+#   Plus = menu (coords unknown -> disabled)
+width = 2560
+height = 1396
+
+# movement joystick (left stick). Slightly right of centre so a fast full-right
+# push stays inside the ring instead of overshooting it.
+move_cx = 410
+move_cy = 1048
+move_radius = 120
+deadzone = 0.18
+
+# A -> basic attack (big ring, bottom right)
+a_x = 2428
+a_y = 1228
+# B -> cancel move: not present on the touch HUD
+b_x = -1
+b_y = -1
+# X -> score (Poke Ball)
+x_x = 1638
+x_y = 1218
+# Y -> battle item
+y_x = 2164
+y_y = 1265
+# LB (Switch R) -> Move 1 / Ice Shard
+lb_x = 2167
+lb_y = 1011
+lb_w = 0
+lb_h = 0
+# RB (Switch ZR) -> Move 2 / Whirlpool
+rb_x = 1996
+rb_y = 1224
+rb_w = 0
+rb_h = 0
+# Select (Switch ZL) -> Unite Move
+select_x = 2370
+select_y = 828
+# Start (Switch Plus) -> menu, position not measured
+start_x = -1
+start_y = -1
+
+# right stick -> camera pan. Default zone is open playfield; if the game only
+# pans from the minimap, set these to the minimap centre.
+camera_cx = 1280
+camera_cy = 420
+camera_range = 220
+camera_deadzone = 0.25

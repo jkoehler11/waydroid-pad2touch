@@ -1,0 +1,18 @@
+#!/bin/bash
+# Give the container a node for the pad2touch virtual touchscreen (created by uinput).
+set -u
+for _ in $(seq 1 60); do
+    [ -s /run/pad2touch.dev ] || { sleep 1; continue; }
+    read -r NODE MAJ MIN < /run/pad2touch.dev
+    PID=$(pgrep -x -f "/system/bin/init second_stage" | head -1)
+    if [ -n "${PID:-}" ] && nsenter -t "$PID" -m -p --root --wd -- /system/bin/sh -c 'test -d /dev/input' 2>/dev/null; then
+        nsenter -t "$PID" -m -p --root --wd -- /system/bin/sh -c "
+            /system/bin/rm -f /dev/input/event21
+            /system/bin/mknod -m 666 /dev/input/event21 c $MAJ $MIN
+        "
+        echo "touchscreen injected: c $MAJ:$MIN as /dev/input/event21"
+        exit 0
+    fi
+    sleep 1
+done
+echo "container not ready; touchscreen not injected"; exit 1

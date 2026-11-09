@@ -1,0 +1,454 @@
+#!/usr/bin/env python3
+"""pad2touch — map a physical gamepad onto a virtual Android touchscreen.
+
+Why: some Android games (e.g. Pokemon UNITE) are touch-only and ignore gamepads
+entirely. Waydroid passes a controller through as a real joystick, which such a
+game simply never reads. This daemon creates a *virtual touchscreen* with Linux
+uinput, then translates the pad's stick and buttons into touch events at
+configurable screen positions, so the game sees ordinary finger taps.
+
+stdlib only. Run as root (needs /dev/uinput).
+
+  pad2touch.py            run the mapper
+  pad2touch.py --list     print the pad's axes/buttons and exit (debug)
+"""
+
+import fcntl
+import os
+import struct
+import sys
+import time
+
+# ---------------------------------------------------------------- constants --
+EV_SYN, EV_KEY, EV_ABS = 0x00, 0x01, 0x03
+SYN_REPORT = 0x00
+BTN_TOUCH = 0x14A
+ABS_MT_SLOT, ABS_MT_TOUCH_MAJOR, ABS_MT_POSITION_X, ABS_MT_POSITION_Y = 0x2F, 0x30, 0x35, 0x36
+ABS_MT_PRESSURE = 0x3A
+ABS_MT_TRACKING_ID = 0x39
+ABS_X, ABS_Y, ABS_HAT0X, ABS_HAT0Y = 0x00, 0x01, 0x10, 0x11
+ABS_RX, ABS_RY = 0x03, 0x04          # right stick -> camera pan
+ABS_Z = 0x02                          # left trigger (LT)
+
+BTN_SOUTH, BTN_EAST, BTN_NORTH, BTN_WEST = 0x130, 0x131, 0x133, 0x134
+BTN_TL, BTN_TR, BTN_SELECT, BTN_START = 0x136, 0x137, 0x13A, 0x13B
+
+UI_DEV_CREATE = 0x5501
+UI_DEV_DESTROY = 0x5502
+UI_SET_EVBIT = 0x40045564
+UI_SET_KEYBIT = 0x40045565
+UI_SET_ABSBIT = 0x40045567
+UI_SET_PROPBIT = 0x4004556E
+UI_ABS_SETUP = 0x401C5504      # _IOW('U', 4, struct uinput_abs_setup)
+UINPUT_ABS_SETUP = struct.Struct("<HHiiiiii")   # code, pad, value, min, max, fuzz, flat, res
+INPUT_PROP_DIRECT = 0x01   # marks the node as a real touchscreen, not a touchpad
+UI_DEV_SETUP = 0x405C5503
+
+INPUT_EVENT = struct.Struct("<qqHHi")   # timeval, type, code, value  (64-bit)
+UINPUT_SETUP = struct.Struct("<HHHH80sI")
+
+CONF = "/etc/pad2touch.conf"
+STATE = "/run/pad2touch.dev"
+PAD_HINT = "/dev/waydroid-gamepad"
+DEBUG = os.environ.get("PAD2TOUCH_DEBUG") == "1"
+
+
+def log(msg):
+    print(f"pad2touch: {msg}", flush=True)
+
+
+# -------------------------------------------------------------------- config --
+DEFAULTS = {
+    # screen is 2560x1396 on this deck/desktop Waydroid image
+    "width": 2560, "height": 1396,
+    # left stick acts as a virtual joystick: touch at centre + direction*radius
+    "move_cx": 300, "move_cy": 1080, "move_radius": 170, "deadzone": 0.20,
+    # face buttons / shoulders / start, as screen coordinates
+    "a_x": 2100, "a_y": 1130,
+    "b_x": 1960, "b_y": 990,
+    "x_x": 2240, "x_y": 990,
+    "y_x": 2100, "y_y": 850,
+    "lb_x": 2020, "lb_y": 740, "lb_w": 120, "lb_h": 70,
+    "rb_x": 2280, "rb_y": 740, "rb_w": 120, "rb_h": 70,
+    # right stick -> camera: a touch that starts in the camera zone and drags.
+    # Default zone is open playfield, mid-screen; point it at the minimap if the
+    # game only pans from there.
+    "camera_cx": 1280, "camera_cy": 420,
+    "camera_range": 220, "camera_deadzone": 0.25,
+    "select_x": 2370, "select_y": 828,
+    "start_x": 2430, "start_y": 120,
+    "tap_ms": 90,          # how long a synthetic tap stays down
+}
+
+
+def load_conf():
+    conf = dict(DEFAULTS)
+    if os.path.exists(CONF):
+        for line in open(CONF):
+            line = line.split("#", 1)[0].strip()
+            if "=" not in line:
+                continue
+            k, v = (s.strip() for s in line.split("=", 1))
+            if k in conf:
+                try:
+                    conf[k] = float(v) if "." in v else int(v)
+                except ValueError:
+                    log(f"ignoring bad value for {k}: {v!r}")
+    return conf
+
+
+# ------------------------------------------------------------------- uinput --
+class Touchscreen:
+    def __init__(self, width, height, name="Pad2Touch"):
+        self.fd = os.open("/dev/uinput", os.O_WRONLY | os.O_NONBLOCK)
+        for ev in (EV_SYN, EV_KEY, EV_ABS):
+            fcntl.ioctl(self.fd, UI_SET_EVBIT, ev)
+        fcntl.ioctl(self.fd, UI_SET_KEYBIT, BTN_TOUCH)
+        # ABS_X/ABS_Y are required: without them InputReader logs
+        # "Touch device did not report support for X or Y axis" and treats
+        # the node as a 1x1 mouse instead of a touchscreen.
+        fcntl.ioctl(self.fd, UI_SET_PROPBIT, INPUT_PROP_DIRECT)
+        for axis, (lo, hi) in {
+            ABS_X: (0, width - 1),
+            ABS_Y: (0, height - 1),
+            ABS_MT_POSITION_X: (0, width - 1),
+            ABS_MT_POSITION_Y: (0, height - 1),
+            ABS_MT_SLOT: (0, 9),
+            ABS_MT_TRACKING_ID: (0, 65535),
+            ABS_MT_TOUCH_MAJOR: (0, 255),
+            ABS_MT_PRESSURE: (0, 255),
+        }.items():
+            fcntl.ioctl(self.fd, UI_SET_ABSBIT, axis)
+            # declare the real range: without this uinput reports min=max=0 and
+            # Android maps the device to a 1x1 surface ("Device reconfigured: size 1x1")
+            fcntl.ioctl(self.fd, UI_ABS_SETUP,
+                        UINPUT_ABS_SETUP.pack(axis, 0, 0, lo, hi, 0, 0, 0))
+        # device identity
+        setup = UINPUT_SETUP.pack(0x06, 0x1, 0x1, 1, name.encode()[:79], 0)  # BUS_VIRTUAL
+        fcntl.ioctl(self.fd, UI_DEV_SETUP, setup)
+        fcntl.ioctl(self.fd, UI_DEV_CREATE)
+        self.next_id = 1
+        self.down = {}   # slot -> (x, y)
+
+    def _emit(self, ev_type, code, value):
+        now = time.monotonic()
+        sec = int(now)
+        usec = int((now - sec) * 1e6)
+        os.write(self.fd, INPUT_EVENT.pack(sec, usec, ev_type, code, value))
+
+    def _dbg(self, kind, slot, x=None, y=None):
+        if not DEBUG:
+            return
+        # frames land in the journal in real order; a button press that is
+        # followed by silence from slot 0 means the pad zeroed the stick
+        ts_ms = int(time.time() * 1000) % 1000000
+        extra = f" ({x:.0f},{y:.0f})" if x is not None else ""
+        log(f"[{ts_ms}] {kind} slot={slot}{extra}")
+
+    def sync(self):
+        self._emit(EV_SYN, SYN_REPORT, 0)
+
+    def touch(self, slot, x, y):
+        self._emit(EV_ABS, ABS_MT_SLOT, slot)
+        self._emit(EV_ABS, ABS_MT_TRACKING_ID, self.next_id)
+        self.next_id = 1 if self.next_id >= 65535 else self.next_id + 1
+        self._emit(EV_ABS, ABS_MT_POSITION_X, int(x))
+        self._emit(EV_ABS, ABS_MT_POSITION_Y, int(y))
+        self._emit(EV_ABS, ABS_X, int(x))
+        self._emit(EV_ABS, ABS_Y, int(y))
+        self._emit(EV_ABS, ABS_MT_TOUCH_MAJOR, 6)
+        self._emit(EV_ABS, ABS_MT_PRESSURE, 200)
+        self._emit(EV_KEY, BTN_TOUCH, 1)
+        self.sync()
+        self.down[slot] = (x, y)
+        self._dbg("DOWN", slot, x, y)
+
+    def move(self, slot, x, y):
+        if slot not in self.down:
+            return self.touch(slot, x, y)
+        self._emit(EV_ABS, ABS_MT_SLOT, slot)
+        self._emit(EV_ABS, ABS_MT_POSITION_X, int(x))
+        self._emit(EV_ABS, ABS_MT_POSITION_Y, int(y))
+        self._emit(EV_ABS, ABS_X, int(x))
+        self._emit(EV_ABS, ABS_Y, int(y))
+        self.sync()
+        self.down[slot] = (x, y)
+        self._dbg("MOVE", slot, x, y)
+
+    def release(self, slot):
+        if slot not in self.down:
+            return
+        self._emit(EV_ABS, ABS_MT_SLOT, slot)
+        self._emit(EV_ABS, ABS_MT_TRACKING_ID, -1)
+        del self.down[slot]
+        if not self.down:
+            self._emit(EV_KEY, BTN_TOUCH, 0)
+        self.sync()
+        self._dbg("UP", slot)
+
+    def close(self):
+        try:
+            fcntl.ioctl(self.fd, UI_DEV_DESTROY)
+        finally:
+            os.close(self.fd)
+
+
+def publish_node(name):
+    """Record the created /dev/input/eventN so the container can be given it."""
+    for entry in os.listdir("/sys/class/input"):
+        if not entry.startswith("event"):
+            continue
+        try:
+            with open(f"/sys/class/input/{entry}/device/name") as f:
+                if f.read().strip() != name:
+                    continue
+            with open(f"/sys/class/input/{entry}/dev") as f:
+                maj, minor = f.read().strip().split(":")
+        except OSError:
+            continue
+        with open(STATE, "w") as f:
+            f.write(f"/dev/input/{entry} {maj} {minor}\n")
+        log(f"virtual touchscreen is {entry} ({maj}:{minor})")
+        return f"/dev/input/{entry}"
+    log("warning: could not locate the new input node in sysfs")
+    return None
+
+
+# --------------------------------------------------------------------- mapper --
+def open_pad():
+    path = PAD_HINT if os.path.exists(PAD_HINT) else None
+    if path is None:
+        for cand in os.listdir("/dev/input"):
+            if cand.startswith("event"):
+                try:
+                    with open(f"/sys/class/input/{cand}/device/name") as f:
+                        if "pad" in f.read().lower():
+                            path = f"/dev/input/{cand}"
+                            break
+                except OSError:
+                    pass
+    if path is None:
+        log("no gamepad found (/dev/waydroid-gamepad missing)")
+        sys.exit(1)
+    log(f"reading pad from {path}")
+    return os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+
+
+EVIOCGABS = lambda code: (2 << 30) | (24 << 16) | (ord("E") << 8) | (0x40 + code)
+ABSINFO = struct.Struct("<iiiiii")
+
+
+def read_abs(fd, code):
+    try:
+        val, _min, _max, _fz, _fl, _res = ABSINFO.unpack(
+            fcntl.ioctl(fd, EVIOCGABS(code), b"\0" * ABSINFO.size))
+        return val
+    except OSError:
+        return None
+
+
+def main():
+    conf = load_conf()
+    ts = Touchscreen(conf["width"], conf["height"])
+    publish_node("Pad2Touch")
+    pad = open_pad()
+
+    stick = [0.0, 0.0]
+    hat = [0.0, 0.0]
+    moving = False
+    last_move = None
+    last_emit = 0.0
+    engaged_at = 0.0
+    center_since = 0.0
+    last_resync = 0.0
+    lt_held = False
+    fast_reengage = False
+    cam = [0.0, 0.0]
+    cam_engaged = False
+    cam_last = None
+    cam_last_emit = 0.0
+    cam_engaged_at = 0.0
+    held = {}          # btn code -> slot
+    buttons = {
+        BTN_SOUTH: ("a_x", "a_y"), BTN_EAST: ("b_x", "b_y"),
+        BTN_NORTH: ("y_x", "y_y"), BTN_WEST: ("x_x", "x_y"),
+        BTN_SELECT: ("select_x", "select_y"), BTN_TR: ("rb_x", "rb_y"),
+        BTN_START: ("start_x", "start_y"),
+    }
+    log("running" + (" (debug)" if DEBUG else ""))
+    try:
+        while True:
+            try:
+                data = os.read(pad, INPUT_EVENT.size * 64)
+            except BlockingIOError:
+                # No new pad events. Do NOT skip the rest of the loop: the stick
+                # state still has to be emitted, otherwise holding the stick
+                # steady produces one tap at the centre and no drag at all.
+                data = b""
+                time.sleep(0.004)
+            # resync from the kernel every ~100 ms: if the pad stops emitting
+            # events we still know where the stick physically is
+            if time.time() - last_resync >= 0.1:
+                rx, ry = read_abs(pad, ABS_X), read_abs(pad, ABS_Y)
+                crx, cry = read_abs(pad, ABS_RX), read_abs(pad, ABS_RY)
+                if crx is not None:
+                    cam[0] = crx / 32767.0
+                if cry is not None:
+                    cam[1] = cry / 32767.0
+                if rx is not None:
+                    stick[0] = rx / 32767.0
+                if ry is not None:
+                    stick[1] = ry / 32767.0
+                last_resync = time.time()
+            for off in range(0, len(data) - INPUT_EVENT.size + 1, INPUT_EVENT.size):
+                _, _, etype, code, value = INPUT_EVENT.unpack_from(data, off)
+                if etype != EV_ABS and etype != EV_KEY:
+                    continue
+                if code in (ABS_RX, ABS_RY):
+                    cam[0 if code == ABS_RX else 1] = value / 32767.0
+                elif code in (ABS_X, ABS_Y):
+                    stick[0 if code == ABS_X else 1] = value / 32767.0
+                elif code == ABS_HAT0X:
+                    # d-pad keeps its own state: a button press makes many pads
+                    # re-report the hat at 0,0, and sharing the variables wiped the
+                    # analog stick value (movement died and only came back when the
+                    # stick itself produced a new event).
+                    hat[0] = float(value)
+                elif code == ABS_HAT0Y:
+                    hat[1] = float(value)
+                elif etype == EV_KEY and code in buttons:
+                    if DEBUG:
+                        log(f"btn {hex(code)} value={value} stick=({stick[0]:+.2f},{stick[1]:+.2f}) hat=({hat[0]:+.0f},{hat[1]:+.0f})")
+                    kx, ky = buttons[code]
+                    if conf.get(kx, -1) < 0:          # button has no touch target
+                        continue
+                    if value and moving:
+                        # hand the single touch over: stop the stick, press the
+                        # button, and let the loop re-engage the stick below
+                        ts.release(0)
+                        moving = False
+                        last_move = None
+                        center_since = 0.0
+                        fast_reengage = True   # no 60 ms pause on the way back
+                    if value:
+                        slot = 1
+                        while slot in held.values() or slot in (7, 8, 9):
+                            slot += 1
+                        held[code] = slot
+                        ts.touch(slot, conf[kx], conf[ky])
+                    else:
+                        slot = held.pop(code, None)
+                        if slot is not None:
+                            ts.release(slot)
+                elif code == ABS_Z:
+                    # analog trigger acts as a button: >40% counts as pressed
+                    pressed = value > 100
+                    if pressed and not lt_held:
+                        lt_held = True
+                        ts.touch(8, conf.get("select_x", 2370), conf.get("select_y", 828))
+                    elif not pressed and lt_held:
+                        lt_held = False
+                        ts.release(8)
+                elif etype == EV_KEY and code == BTN_TL:
+                    # left shoulder: a wide tap zone, kept as a point for simplicity
+                    if value:
+                        held[code] = 7
+                        ts.touch(7, conf["lb_x"] + conf["lb_w"] / 2, conf["lb_y"] + conf["lb_h"] / 2)
+                    else:
+                        held.pop(code, None)
+                        ts.release(7)
+
+            # stick -> virtual joystick (one finger, slot 0)
+            #
+            # Games with a "floating" joystick treat the touch-down point as the
+            # stick origin, so a finger that lands already displaced reads as a
+            # single constant vector: the character lurches once and then cannot
+            # be steered until release. Land on the centre first, then drag.
+            vx = max(-1.0, min(1.0, stick[0] + hat[0]))
+            vy = max(-1.0, min(1.0, stick[1] + hat[1]))
+            mag = (vx ** 2 + vy ** 2) ** 0.5
+            if mag > conf["deadzone"]:
+                nx, ny = vx / mag, vy / mag
+                scale = min(mag, 1.0)          # proportional, not always full tilt
+                x = conf["move_cx"] + nx * conf["move_radius"] * scale
+                y = conf["move_cy"] + ny * conf["move_radius"] * scale
+                now = time.time()
+                if not moving:
+                    # land on the centre, and give the game a beat to register the
+                    # touch-down before dragging: if down and drag arrive in the
+                    # same frame the app can coalesce them into "finger started
+                    # already offset", which reads as one lurch and no steering.
+                    ts.touch(0, conf["move_cx"], conf["move_cy"])
+                    moving = True
+                    engaged_at = now
+                    center_since = 0.0
+                    last_move = None
+                    last_emit = 0.0
+                global_fast = fast_reengage
+                drag_ready = global_fast or (now - engaged_at) >= 0.06
+                fast_reengage = False
+                # re-send periodically even when the position is unchanged: a
+                # button press touches a different slot, and without a heartbeat
+                # the game treats the stick as idle and stops movement until the
+                # stick is moved again.
+                if drag_ready and (last_move is None or now - last_emit >= 0.03
+                                   or abs(x - last_move[0]) > 1 or abs(y - last_move[1]) > 1):
+                    ts.move(0, x, y)
+                    last_move = (x, y)
+                    last_emit = now
+                    if DEBUG:
+                        log(f"stick=({vx:+.2f},{vy:+.2f}) touch=({x:.0f},{y:.0f})")
+            elif moving:
+                # debounce: a button press can make cheap pads emit a single 0
+                # on the stick axes. Releasing immediately killed movement until
+                # the stick moved again, so wait for a sustained centre.
+                if center_since == 0.0:
+                    center_since = time.time()
+                if (time.time() - center_since) >= 0.15:
+                    ts.release(0)
+                    moving = False
+                    last_move = None
+                    center_since = 0.0
+                    if DEBUG:
+                        log("stick released")
+            # right stick -> camera pan (touch-drag inside the camera zone)
+            cmag = (cam[0] ** 2 + cam[1] ** 2) ** 0.5
+            if cmag > conf.get("camera_deadzone", 0.25):
+                cnx, cny = cam[0] / cmag, cam[1] / cmag
+                cscale = min(cmag, 1.0)
+                cx = conf.get("camera_cx", 1280) + cnx * conf.get("camera_range", 220) * cscale
+                cy = conf.get("camera_cy", 420) + cny * conf.get("camera_range", 220) * cscale
+                cnow = time.time()
+                if not cam_engaged:
+                    ts.touch(9, conf.get("camera_cx", 1280), conf.get("camera_cy", 420))
+                    cam_engaged = True
+                    cam_last = None
+                    cam_last_emit = 0.0
+                    cam_engaged_at = cnow
+                if cnow - cam_engaged_at >= 0.05 and (
+                        cam_last is None or cnow - cam_last_emit >= 0.03
+                        or abs(cx - cam_last[0]) > 1 or abs(cy - cam_last[1]) > 1):
+                    ts.move(9, cx, cy)
+                    cam_last = (cx, cy)
+                    cam_last_emit = cnow
+            elif cam_engaged:
+                ts.release(9)
+                cam_engaged = False
+                cam_last = None
+
+    except KeyboardInterrupt:
+        pass
+    finally:
+        ts.close()
+        try:
+            os.unlink(STATE)
+        except OSError:
+            pass
+
+
+if __name__ == "__main__":
+    if "--list" in sys.argv:
+        conf = load_conf()
+        print("config:", conf)
+        sys.exit(0)
+    main()

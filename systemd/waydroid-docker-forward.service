@@ -1,0 +1,12 @@
+[Unit]
+Description=Allow Waydroid (waydroid0) traffic past Docker's FORWARD DROP policy
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/bash -c 'iptables -C DOCKER-USER -i waydroid0 -j ACCEPT 2>/dev/null || iptables -I DOCKER-USER 1 -i waydroid0 -j ACCEPT; iptables -C DOCKER-USER -o waydroid0 -j ACCEPT 2>/dev/null || iptables -I DOCKER-USER 2 -o waydroid0 -j ACCEPT'
+
+[Install]
+WantedBy=multi-user.target

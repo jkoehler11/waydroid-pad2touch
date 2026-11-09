@@ -1,0 +1,12 @@
+[Unit]
+Description=Gamepad to touchscreen mapper for Waydroid
+After=sound.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/pad2touch.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

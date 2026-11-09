@@ -1,0 +1,2 @@
+# Every Waydroid container start recreates the waydroid0 bridge; inject the pad then.
+SUBSYSTEM=="net", KERNEL=="waydroid0", ACTION=="add", TAG+="systemd", ENV{SYSTEMD_WANTS}="waydroid-gamepad.service"

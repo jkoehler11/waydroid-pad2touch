@@ -1,0 +1,2 @@
+# Expose the Xbox 360 pad to Waydroid's LXC container: stable symlink + world-readable
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="Microsoft X-Box 360 pad", MODE="0666", SYMLINK+="waydroid-gamepad"

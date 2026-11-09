@@ -1,0 +1,7 @@
+[Unit]
+Description=Inject host gamepad into the Waydroid container
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/waydroid-gamepad-add
+TimeoutStartSec=120

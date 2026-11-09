@@ -1,0 +1,24 @@
+#!/bin/bash
+# Inject the host gamepad into the running Waydroid container as an evdev node.
+# Waydroid only forwards keyboard/pointer, so pads must be added by hand. The
+# node has to be created with mode 666 in ONE step (mknod -m 666): Android's
+# EventHub reacts to IN_CREATE and opens immediately, so a later chmod loses
+# the race and the pad stays invisible until the next container start.
+set -u
+SRC=/dev/waydroid-gamepad
+[ -e "$SRC" ] || { echo "no gamepad at $SRC"; exit 0; }
+read -r MAJ MIN < <(stat -L -c '%Hr %Lr' "$SRC")
+for _ in $(seq 1 90); do
+    PID=$(pgrep -x -f "/system/bin/init second_stage" | head -1)
+    if [ -n "${PID:-}" ] && nsenter -t "$PID" -m -p --root --wd -- /system/bin/sh -c 'test -d /dev/input' 2>/dev/null; then
+        nsenter -t "$PID" -m -p --root --wd -- /system/bin/sh -c "
+            /system/bin/rm -f /dev/input/event20
+            /system/bin/mknod -m 666 /dev/input/event20 c $MAJ $MIN
+        "
+        echo "gamepad injected: c $MAJ:$MIN as /dev/input/event20"
+        exit 0
+    fi
+    sleep 1
+done
+echo "waydroid container did not come up; gamepad not injected"
+exit 1

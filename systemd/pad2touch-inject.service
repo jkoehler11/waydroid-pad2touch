@@ -1,0 +1,8 @@
+[Unit]
+Description=Inject the pad2touch touchscreen into the Waydroid container
+After=pad2touch.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/pad2touch-inject
+TimeoutStartSec=120
