@@ -31,12 +31,12 @@ public class CaptureService extends Service {
 
     /** app profile keys, in the order they are captured */
     private static final String[] KEYS = {
-            "a", "b", "x", "y", "lb", "lt", "recall", "move", "camera"
+            "a", "x", "b", "y", "lb", "lt", "recall", "move", "camera"
     };
     private static final String[] LABELS = {
             "Basic attack",
-            "Move 2",
             "Move 1",
+            "Move 2",
             "Battle item",
             "Score",
             "Unite Move",

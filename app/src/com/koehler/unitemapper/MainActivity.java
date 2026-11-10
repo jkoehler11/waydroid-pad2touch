@@ -32,8 +32,8 @@ public class MainActivity extends Activity {
     private static final String[][] ACTIONS = {
             {"move", "Movement stick centre (radius below)"},
             {"a", "Basic attack"},
-            {"b", "Move 2"},
             {"x", "Move 1"},
+            {"b", "Move 2"},
             {"y", "Battle item"},
             {"lb", "Score"},
             {"lt", "Unite Move"},
@@ -207,10 +207,10 @@ public class MainActivity extends Activity {
     private void loadDefaults() {
         int[][] d = {
                 {410, 1048},   // move
-                {2428, 1228},  // a
-                {1996, 1224},  // b
-                {2167, 1011},  // x  (ice shard)
-                {2164, 1265},  // y  (battle item)
+                {2428, 1228},  // a  basic attack
+                {2167, 1011},  // x  move 1   (order matches ACTIONS above)
+                {2080, 1180},  // b  move 2
+                {2164, 1265},  // y  battle item
                 {1638, 1218},  // lb (score)
                 {2370, 828},   // lt (unite)
                 {1280, 420},   // camera zone
