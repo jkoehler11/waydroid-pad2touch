@@ -366,15 +366,13 @@ def main():
                     keys_down = any((_ks[k // 8] >> (k % 8)) & 1 for k in BIND_CODES.values())
                 except OSError:
                     keys_down = False
-                if keys_down:
-                    pass
-                else:
+                if True:
                     for _c, _s in list(held.items()):
                         if isinstance(_c, int) and _c in BIND_CODES.values() and \
                                 not ((_ks[_c // 8] >> (_c % 8)) & 1):
                             ts.release(_s)
                             held.pop(_c, None)
-                if not keys_down and (time.time() - last_key_at) >= 0.15:
+                if True:
                     if rx is not None:
                         set_axis(stick, 0, rx)
                     if ry is not None:
@@ -387,7 +385,7 @@ def main():
                 # This pad reports 0 on the stick axes around any button event;
                 # that fake centre is what killed movement. Ignore near-zero
                 # reports for a short window, but always honour real deflection.
-                axis_ok = (not keys_down) and (time.time() - last_key_at) >= 0.15
+                axis_ok = True
                 if code in (ABS_RX, ABS_RY):
                     if axis_ok:
                         set_axis(cam, 0 if code == ABS_RX else 1, value)
@@ -489,11 +487,10 @@ def main():
                 # the stick moved again, so wait for a sustained centre.
                 if center_since == 0.0:
                     center_since = time.time()
-                # 0.15 s was too eager: this pad reports centre for a few hundred
-                # ms around every button event, and each bogus release forces the
-                # game to re-grab the joystick (that reads as "can't move again").
-                # 0.6 s costs nothing in feel but rides out the artefact.
-                if (time.time() - center_since) >= 0.60:
+                # The axis spikes that used to force bogus releases are now
+                # filtered at the source, so release promptly again: a long
+                # debounce made the character coast after the stick was let go.
+                if (time.time() - center_since) >= 0.12:
                     ts.release(0)
                     # a release forced by the pad's axis artefact should re-engage
                     # instantly: no 60 ms landing pause on the way back
