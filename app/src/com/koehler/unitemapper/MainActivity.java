@@ -220,19 +220,34 @@ public class MainActivity extends Activity {
         android.content.Intent svc = new android.content.Intent(this, CaptureService.class);
         startService(svc);
 
-        // 2. bring the GAME to the front. moveTaskToBack() is not enough: this app
-        //    is usually launched from the launcher, so "back" lands on the home
-        //    screen and the overlay covers it with no way into the game.
-        android.content.Intent game = getPackageManager().getLaunchIntentForPackage(GAME_PKG);
-        if (game != null) {
-            game.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK
-                    | android.content.Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+        // 2. bring the GAME to the front. getLaunchIntentForPackage() resolves to
+        //    CdnImportActivity (a download screen), not the game itself, so name
+        //    the real activity and fall back only if it is missing.
+        boolean opened = false;
+        try {
+            android.content.ComponentName cmp = new android.content.ComponentName(
+                    GAME_PKG, "com.nishiki.pgame.n.PGameActivity");
+            android.content.Intent game = new android.content.Intent(android.content.Intent.ACTION_MAIN)
+                    .addCategory(android.content.Intent.CATEGORY_LAUNCHER)
+                    .setComponent(cmp)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                            | android.content.Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
+                            | android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP);
             startActivity(game);
+            opened = true;
+        } catch (Exception e) {
+            android.content.Intent game = getPackageManager().getLaunchIntentForPackage(GAME_PKG);
+            if (game != null) {
+                game.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(game);
+                opened = true;
+            }
+        }
+        if (opened) {
             finish();
         } else {
             Toast.makeText(this, "game not installed (" + GAME_PKG + ")", Toast.LENGTH_LONG).show();
-            android.content.Intent stop = new android.content.Intent(this, CaptureService.class);
-            stopService(stop);
+            stopService(new android.content.Intent(this, CaptureService.class));
             moveTaskToBack(true);
         }
     }
