@@ -34,15 +34,15 @@ public class CaptureService extends Service {
             "a", "b", "x", "y", "lb", "lt", "recall", "move", "camera"
     };
     private static final String[] LABELS = {
-            "basic attack (the big one)",
-            "move 2 (whirlpool / barrier)",
-            "move 1 (ice shard / confusion)",
-            "battle item",
-            "score button",
+            "Basic attack",
+            "Move 2",
+            "Move 1",
+            "Battle item",
+            "Score",
             "Unite Move",
-            "RECALL / teleport-to-base button",
-            "movement joystick CENTRE",
-            "camera area (middle right)",
+            "Recall / teleport to base",
+            "Movement stick CENTRE",
+            "Camera area",
     };
 
     private WindowManager wm;

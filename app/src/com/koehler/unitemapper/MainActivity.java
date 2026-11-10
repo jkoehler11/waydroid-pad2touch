@@ -27,15 +27,17 @@ import java.util.Map;
 public class MainActivity extends Activity {
 
     /** action key used by pad2touch.conf -> label shown here */
+    // Labels name the ACTION only: the button is chosen in the dropdown, and
+    // move names change with the Pokémon, so neither belongs in the text.
     private static final String[][] ACTIONS = {
             {"move", "Movement stick centre (radius below)"},
-            {"a", "A — basic attack"},
-            {"b", "B — Whirlpool / move 2"},
-            {"x", "X — Ice Shard / move 1"},
-            {"y", "Y — battle item"},
-            {"lb", "LB — score"},
-            {"lt", "LT — Unite Move"},
-            {"camera", "Right stick — camera zone origin"},
+            {"a", "Basic attack"},
+            {"b", "Move 2"},
+            {"x", "Move 1"},
+            {"y", "Battle item"},
+            {"lb", "Score"},
+            {"lt", "Unite Move"},
+            {"camera", "Camera area"},
             {"recall", "Recall / teleport to base"},
     };
 
@@ -65,7 +67,7 @@ public class MainActivity extends Activity {
         root.addView(title);
 
         TextView help = new TextView(this);
-        help.setText("Screen size " + screenSize() + ".\n"
+        help.setText("Screen " + screenSize() + ". Pick the controller button on the right.\n"
                 + "Enter the pixel position of each control. The host reads this file and "
                 + "presses there when you use the matching button.");
         help.setTextSize(12);
