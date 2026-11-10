@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gamepad on Android games in Waydroid — full setup guide</title>
+<style>
+  :root { --fg:#1c2430; --muted:#5b6778; --bg:#ffffff; --panel:#f5f7fa; --border:#dde3ea;
+          --accent:#2f6fed; --code-bg:#f2f4f7; --warn:#b45309; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg:#e6edf3; --muted:#9aa7b4; --bg:#12161c; --panel:#1a2029; --border:#2b333d;
+            --accent:#6ea8fe; --code-bg:#1b222b; --warn:#f0b429; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif; }
+  main { max-width:56rem; margin:0 auto; padding:2.5rem 1.25rem 5rem; }
+  h1 { font-size:2rem; line-height:1.2; margin:0 0 .5rem; letter-spacing:-.02em; }
+  h2 { font-size:1.4rem; margin:2.8rem 0 .8rem; padding-top:1.2rem; border-top:1px solid var(--border); }
+  h3 { font-size:1.1rem; margin:1.8rem 0 .5rem; }
+  p, li { color:var(--fg); }
+  a { color:var(--accent); text-decoration:none; }
+  a:hover { text-decoration:underline; }
+  code { background:var(--code-bg); padding:.15em .4em; border-radius:4px;
+         font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.9em; }
+  pre { background:var(--code-bg); border:1px solid var(--border); border-radius:8px;
+        padding:1rem 1.1rem; overflow-x:auto; }
+  pre code { background:none; padding:0; font-size:.88rem; }
+  table { border-collapse:collapse; width:100%; margin:1.2rem 0; font-size:.94rem; }
+  th, td { border:1px solid var(--border); padding:.55rem .7rem; text-align:left; vertical-align:top; }
+  th { background:var(--panel); font-weight:600; }
+  blockquote { margin:1.2rem 0; padding:.7rem 1rem; border-left:3px solid var(--warn);
+               background:var(--panel); color:var(--fg); border-radius:0 6px 6px 0; }
+  blockquote p { margin:.2rem 0; }
+  hr { border:none; border-top:1px solid var(--border); margin:2.5rem 0; }
+  ul, ol { padding-left:1.4rem; }
+  img { max-width:100%; }
+</style>
+</head>
+<body>
+<main>
+<h1 id="gamepad-on-android-games-in-waydroid-full-setup-guide">Gamepad on Android games in Waydroid — full setup guide</h1>
+<p><strong>What this gets you:</strong> a physical controller working in a touch-only Android game running inside
+Waydroid — including games that have no controller support at all — plus <strong>Unite Mapper</strong>, a small
+Android app where you type or tap the on-screen positions of each control.</p>
+<p>Written from a working setup: Arch desktop, Waydroid 1.6.3, Xbox 360 pad, Pokémon UNITE (Revival).</p>
+<p>Everything here is free and open source:
+<strong>https://github.com/jkoehler11/waydroid-pad2touch</strong></p>
+<hr />
+<h2 id="contents">Contents</h2>
+<ol>
+<li><a href="#1-before-you-start">Before you start</a></li>
+<li><a href="#2-install-waydroid">Install Waydroid</a></li>
+<li><a href="#3-get-a-controller-working">Get a controller working</a></li>
+<li><a href="#4-install-and-set-up-unite-mapper">Install and set up Unite Mapper</a></li>
+<li><a href="#5-troubleshooting">Troubleshooting</a></li>
+<li><a href="#6-why-it-works-this-way">Why it works this way</a></li>
+</ol>
+<hr />
+<h2 id="1-before-you-start">1. Before you start</h2>
+<table>
+<thead>
+<tr>
+<th>Requirement</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Wayland session</strong></td>
+<td>Waydroid is a Wayland client. On X11 it needs <code>weston</code> or <code>cage</code> as a nested compositor.</td>
+</tr>
+<tr>
+<td><strong>Kernel with binder</strong></td>
+<td>Most distro kernels ship <code>binder_linux</code>. Check: <code>modprobe binder_linux devices="binder,hwbinder,vndbinder"</code> (no error = good).</td>
+</tr>
+<tr>
+<td><strong>~10 GB disk</strong></td>
+<td>System image plus apps.</td>
+</tr>
+<tr>
+<td><strong>A gamepad</strong></td>
+<td>Any XInput/DirectInput pad that shows up as <code>/dev/input/event*</code>. Xbox pads are the best tested.</td>
+</tr>
+<tr>
+<td><strong>A game that runs in Waydroid</strong></td>
+<td>This guide assumes it already launches and you can play it with a mouse.</td>
+</tr>
+</tbody>
+</table>
+<p>Two things worth knowing up front:</p>
+<ul>
+<li><strong>Android games cannot use a controller that Android itself can't see.</strong> Waydroid has no gamepad
+  input path at all, so the controller has to be injected — that's Section 3.</li>
+<li><strong>Overlay mapper apps from the Play Store will not work here.</strong> Mantis, Octopus and friends
+  activate over <em>wireless debugging</em>, and Waydroid's GAPPS image has no Wi-Fi interface, so
+  wireless debugging cannot be enabled. That's why this project exists.</li>
+</ul>
+<hr />
+<h2 id="2-install-waydroid">2. Install Waydroid</h2>
+<p>Official docs (always check these first): <strong>https://docs.waydro.id/usage/install-on-desktops</strong></p>
+<h3 id="arch-linux">Arch Linux</h3>
+<pre><code class="language-bash">yay -S waydroid waydroid-image-gapps
+# or, for a build without Google apps (smaller, no Play Store):
+yay -S waydroid waydroid-image
+</code></pre>
+<p>Full instructions and troubleshooting: <a href="https://wiki.archlinux.org/title/Waydroid">https://wiki.archlinux.org/title/Waydroid</a></p>
+<p>Then initialise the image:</p>
+<pre><code class="language-bash">sudo waydroid init -s GAPPS      # omit -s GAPPS for the vanilla image
+</code></pre>
+<h3 id="fedora">Fedora</h3>
+<pre><code class="language-bash">sudo dnf install waydroid
+</code></pre>
+<p>On Silverblue/Kinoite and other immutable spins:</p>
+<pre><code class="language-bash">rpm-ostree install waydroid
+</code></pre>
+<p>Launch Waydroid from the applications menu and, when it asks for OTA URLs, paste:</p>
+<ul>
+<li>System OTA: <code>https://ota.waydro.id/system</code></li>
+<li>Vendor OTA: <code>https://ota.waydro.id/vendor</code></li>
+</ul>
+<h3 id="debian-ubuntu-and-derivatives">Debian / Ubuntu and derivatives</h3>
+<p>Check yours first — recent releases ship it:</p>
+<table>
+<thead>
+<tr>
+<th>Release</th>
+<th>How</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Debian 14+, Ubuntu 26.10+</td>
+<td>In the official repository — just <code>sudo apt install waydroid</code></td>
+</tr>
+<tr>
+<td>Debian 13 (Trixie)</td>
+<td>Available in <strong>backports</strong> — enable backports, then install</td>
+</tr>
+<tr>
+<td>Older releases</td>
+<td>Add the third-party repo, below</td>
+</tr>
+</tbody>
+</table>
+<pre><code class="language-bash"># older Debian/Ubuntu only
+sudo apt install curl ca-certificates -y
+curl -s https://repo.waydro.id | sudo bash     # append  -s noble  etc. if detection fails
+sudo apt update
+sudo apt install waydroid -y
+</code></pre>
+<p>Make sure you're on a Wayland session before launching (Ubuntu 22.04+ defaults to it).</p>
+<h3 id="opensuse-tumbleweed-slowroll">openSUSE Tumbleweed / Slowroll</h3>
+<p>Community guide maintained here:
+<a href="https://github.com/waydroid/waydroid/discussions/1463">https://github.com/waydroid/waydroid/discussions/1463</a></p>
+<h3 id="void-linux">Void Linux</h3>
+<pre><code class="language-bash">sudo xbps-install -S waydroid
+</code></pre>
+<p>Read <code>/usr/share/doc/waydroid/README.voidlinux</code> afterwards.</p>
+<h3 id="anything-else">Anything else</h3>
+<p>Check <a href="https://docs.waydro.id/usage/install-on-desktops">https://docs.waydro.id/usage/install-on-desktops</a> — NixOS, postmarketOS, Sailfish, Zorin and
+others all have instructions there.</p>
+<h3 id="first-run">First run</h3>
+<pre><code class="language-bash"># start the container (root), then the session (your user, separate terminal)
+sudo waydroid container start
+waydroid session start
+
+# when it says &quot;Android with user 0 is ready&quot;
+waydroid show-full-ui
+</code></pre>
+<p>To use the Play Store you need the <strong>GAPPS</strong> image. Google will report the device as uncertified
+until you register it — get the Android ID with:</p>
+<pre><code class="language-bash">adb shell settings get secure android_id     # or: waydroid shell -- settings get secure android_id
+</code></pre>
+<p>then register it at <a href="https://www.google.com/android/uncertified">https://www.google.com/android/uncertified</a>.</p>
+<h3 id="if-web-pages-and-logins-dont-work">If web pages and logins don't work</h3>
+<p>This bites everyone running Docker on the same machine. Docker sets the IPv4 <code>FORWARD</code> policy to
+<code>DROP</code>, and Waydroid's traffic dies even though DHCP and DNS work (Waydroid runs its own dnsmasq).
+Symptom: apps load, but every page and login times out.</p>
+<pre><code class="language-bash"># allow forwarding for the waydroid bridge
+sudo iptables -I DOCKER-USER 1 -i waydroid0 -j ACCEPT
+sudo iptables -I DOCKER-USER 2 -o waydroid0 -j ACCEPT
+</code></pre>
+<p>To make it survive reboots, save those two rules as a systemd oneshot unit that runs after
+<code>docker.service</code>. A ready-made <code>waydroid-docker-forward.service</code> is in the repo under <code>systemd/</code>.</p>
+<hr />
+<h2 id="3-get-a-controller-working">3. Get a controller working</h2>
+<h3 id="the-problem-precisely">The problem, precisely</h3>
+<p>Waydroid forwards <strong>keyboard, pointer and tablet</strong> events from your desktop into Android. It has no
+equivalent path for gamepads, so a plugged-in controller is invisible to Android — <code>dumpsys input</code>
+shows only <code>wayland_keyboard</code>, <code>wayland_pointer</code> and <code>wayland_tablet</code>.</p>
+<p>The fix is to hand the pad to Android as a real input device, and to translate its buttons and
+sticks into touches for the game.</p>
+<pre><code>gamepad (/dev/input/eventN)
+      │  udev symlink
+      ▼
+/dev/waydroid-gamepad ──► pad2touch (host daemon, uinput)
+                                │
+                                ▼
+                    Pad2Touch virtual touchscreen
+                                │  injected into the container
+                                ▼
+                        /dev/input/event21 ──► Android ──► game
+</code></pre>
+<h3 id="step-1-give-the-pad-a-stable-name">Step 1 — give the pad a stable name</h3>
+<p>Find your pad's name:</p>
+<pre><code class="language-bash">cat /proc/bus/input/devices | grep -A2 -i &quot;x-box\|gamepad\|controller&quot;
+</code></pre>
+<p>Create <code>/etc/udev/rules.d/99-waydroid-gamepad.rules</code>, replacing the name with yours:</p>
+<pre><code>SUBSYSTEM==&quot;input&quot;, KERNEL==&quot;event*&quot;, ATTRS{name}==&quot;Microsoft X-Box 360 pad&quot;, MODE=&quot;0666&quot;, SYMLINK+=&quot;waydroid-gamepad&quot;
+</code></pre>
+<pre><code class="language-bash">sudo udevadm control --reload-rules
+sudo udevadm trigger
+ls -l /dev/waydroid-gamepad      # should exist now
+</code></pre>
+<h3 id="step-2-pass-the-device-into-the-container">Step 2 — pass the device into the container</h3>
+<p>Waydroid's LXC config already permits input devices; what it needs is a mount entry. Add to
+<code>/usr/lib/waydroid/data/configs/config_4</code> (the <code>_4</code> suffix is the API level — use whichever
+<code>config_*</code> your installation has):</p>
+<pre><code>lxc.mount.entry = /dev/waydroid-gamepad dev/input/event20 none bind,create=file,optional 0 0
+</code></pre>
+<p>Because the node must exist <em>inside</em> the container's own namespace, the cleanest approach is the
+small helper in the repo (<code>waydroid-gamepad-add</code> + a systemd unit triggered by the <code>waydroid0</code>
+interface appearing), which does an <code>mknod -m 666</code> in one step:</p>
+<pre><code class="language-bash">sudo install -m 755 waydroid-gamepad-add /usr/local/bin/
+sudo cp systemd/waydroid-gamepad.service /etc/systemd/system/
+sudo systemctl daemon-reload &amp;&amp; sudo systemctl enable --now waydroid-gamepad.service
+</code></pre>
+<blockquote>
+<p><strong>Do not bind-mount a file over <code>/dev/input/event*</code> on a running container.</strong> It takes Waydroid's
+keyboard/pointer FIFOs with it and your mouse stops working inside Android.</p>
+</blockquote>
+<h3 id="step-3-install-the-mapper-daemon">Step 3 — install the mapper daemon</h3>
+<p>The repo has an installer that handles the whole chain — udev rule, container plumbing, daemon,
+systemd units:</p>
+<pre><code class="language-bash">git clone https://github.com/jkoehler11/waydroid-pad2touch
+cd waydroid-pad2touch
+sudo ./waydroid-host-fix.sh check     # reports what is missing
+sudo ./waydroid-host-fix.sh fix       # applies it
+</code></pre>
+<p>Then confirm Android can see the virtual touchscreen:</p>
+<pre><code class="language-bash">waydroid shell -- dumpsys input | grep -A2 Pad2Touch
+#   Pad2Touch
+#     Classes: TOUCH | TOUCH_MT
+</code></pre>
+<p>And that the pad is visible too:</p>
+<pre><code class="language-bash">waydroid shell -- dumpsys input | grep -i &quot;x-box&quot;
+</code></pre>
+<h3 id="step-4-check-the-mapping">Step 4 — check the mapping</h3>
+<p><code>/etc/pad2touch.conf</code> holds the screen coordinates and the button bindings. You do <strong>not</strong> need to
+edit it by hand — Section 4 sets it from an app — but the daemon prints what it resolved at
+startup, which is the quickest way to confirm a config is live:</p>
+<pre><code class="language-bash">journalctl -u pad2touch.service -n 6 --no-pager | grep bindings
+# pad2touch: bindings: B=a(2428,1228), RT=b(2080,1180), RB=x(2167,1011), ...
+</code></pre>
+<hr />
+<h2 id="4-install-and-set-up-unite-mapper">4. Install and set up Unite Mapper</h2>
+<p><strong>Unite Mapper</strong> is a small Android app (about 20 KB, no dependencies) that owns the coordinates and
+the button bindings. It can capture positions by having you tap the game, so you never guess pixels.</p>
+<h3 id="install-the-app">Install the app</h3>
+<pre><code class="language-bash"># from the repo
+waydroid app install apk/UniteMapper.apk
+
+# or build it yourself (needs only an Android SDK, no Gradle)
+cd app &amp;&amp; ./build.sh
+</code></pre>
+<p>Grant the overlay permission it needs for tap-to-capture:</p>
+<pre><code class="language-bash">waydroid shell -- appops set com.koehler.unitemapper SYSTEM_ALERT_WINDOW allow
+</code></pre>
+<h3 id="install-the-host-half">Install the host half</h3>
+<p>The app writes a JSON profile; a host script pulls it and applies it to the daemon.</p>
+<pre><code class="language-bash">sudo install -m 755 host/unite-profile-sync /usr/local/bin/
+sudo cp systemd/unite-profile-sync.service systemd/unite-profile-sync.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now unite-profile-sync.timer
+</code></pre>
+<p>The timer checks every 20 seconds. When the profile changes it rewrites <code>/etc/pad2touch.conf</code>,
+restarts the daemon and re-injects the touch device — so <strong>saving in the app is all you do.</strong></p>
+<h3 id="register-your-hud">Register your HUD</h3>
+<ol>
+<li>Open <strong>Unite Mapper</strong> in Waydroid.</li>
+<li>Press <strong>Capture coordinates by tapping the game</strong>. The game comes to the front with a bar across
+   the top reading <code>Tap 1/9</code>.</li>
+<li>Tap the named control on screen. It advances to the next.</li>
+<li>Nine taps, in this order:</li>
+</ol>
+<p><code>Basic attack → Move 1 → Move 2 → Battle item → Score → Unite Move → Recall → joystick centre → camera area</code></p>
+<ol start="5">
+<li>The ninth tap saves automatically. Within ~20 seconds the controller uses those positions.</li>
+</ol>
+<p>Tapping the <strong>bottom-left corner</strong> cancels a capture.</p>
+<h3 id="set-the-button-bindings">Set the button bindings</h3>
+<p>Each control row has a dropdown: <code>none, A, B, X, Y, LB, RB, LT, RT, START, BACK</code>. Pick whatever
+matches the layout you're used to, then press <strong>Save profile</strong>. <code>none</code> disables that control.</p>
+<p>Defaults (chosen to mirror a Switch-style layout): Basic attack <strong>B</strong>, Move 1 <strong>RB</strong>,
+Move 2 <strong>RT</strong>, Battle item <strong>X</strong>, Score <strong>Y</strong>, Unite Move <strong>LT</strong>, Recall <strong>BACK</strong>.</p>
+<p><strong>Apply default button mappings</strong> restores the dropdowns without touching your captured
+coordinates. <strong>Load measured defaults</strong> resets <em>both</em> — only use it if you want to start over.</p>
+<h3 id="manual-numbers">Manual numbers</h3>
+<p>You can also type coordinates in directly. The row layout on a 2560×1366 surface (the defaults):</p>
+<table>
+<thead>
+<tr>
+<th>Control</th>
+<th>X</th>
+<th>Y</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Movement stick centre</td>
+<td>410</td>
+<td>1048</td>
+</tr>
+<tr>
+<td>Basic attack</td>
+<td>2428</td>
+<td>1228</td>
+</tr>
+<tr>
+<td>Move 1</td>
+<td>2167</td>
+<td>1011</td>
+</tr>
+<tr>
+<td>Move 2</td>
+<td>2080</td>
+<td>1180</td>
+</tr>
+<tr>
+<td>Battle item</td>
+<td>2164</td>
+<td>1265</td>
+</tr>
+<tr>
+<td>Score</td>
+<td>1638</td>
+<td>1218</td>
+</tr>
+<tr>
+<td>Unite Move</td>
+<td>2370</td>
+<td>828</td>
+</tr>
+<tr>
+<td>Recall</td>
+<td>1700</td>
+<td>1300</td>
+</tr>
+<tr>
+<td>Camera area</td>
+<td>1280</td>
+<td>420</td>
+</tr>
+</tbody>
+</table>
+<p>Stick radius is 120 px; raise it if the character walks slowly at full tilt, lower it if a gentle
+push runs at full speed.</p>
+<h3 id="changing-screen-size">Changing screen size</h3>
+<p>Coordinates are absolute pixels. If you resize the Waydroid window, the touch device is rebuilt to
+the new size automatically, but <strong>the coordinates no longer line up</strong> — re-capture. The app shows the
+current resolution at the top so you can spot a mismatch.</p>
+<hr />
+<h2 id="5-troubleshooting">5. Troubleshooting</h2>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Cause</th>
+<th>Fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Nothing responds after a button press</td>
+<td>More than 9 multitouch slots in use — the allocator ran past slot 9 and corrupted the stream</td>
+<td>Use the repo's daemon (fixed per-control slots) — this is already fixed upstream</td>
+</tr>
+<tr>
+<td>Movement stops when you press a button, or keeps going after you let go</td>
+<td>The pad reports garbage axis values on button edges (real Xbox pads: <code>+1.00,+0.10</code> jumping to <code>-0.04,-0.09</code> in one sample)</td>
+<td>Handled by spike rejection in the daemon; don't add axis "freezing" logic on top — it breaks releasing</td>
+</tr>
+<tr>
+<td>1–2 second freezes, repeatedly</td>
+<td>The daemon is crash-looping; each restart re-registers the touch device with Android</td>
+<td>Check the daemon log for tracebacks (command below) — fix those first, never tune coordinates around them</td>
+</tr>
+<tr>
+<td>Only some buttons work / bindings seem ignored</td>
+<td>The config parser silently dropped unknown keys or non-numeric values</td>
+<td>Compare the daemon's startup <code>bindings:</code> line with <code>/etc/pad2touch.conf</code> — they must match exactly (command below)</td>
+</tr>
+<tr>
+<td>Touch works in menus but not in game</td>
+<td>Coordinates are off — they're absolute pixels, not percentages</td>
+<td>Re-capture that control</td>
+</tr>
+<tr>
+<td>Capture overlay opens the home screen instead of the game</td>
+<td>The game's launcher activity is a downloader, not the game</td>
+<td>Use the app from the repo, which targets the game activity directly</td>
+</tr>
+<tr>
+<td>App can't save: "permission denied"</td>
+<td>The profile file is owned by <code>shell</code> (e.g. copied in with <code>adb push</code>)</td>
+<td>Re-capture or save from the app; if it persists, see the README note on fixing ownership from inside the container</td>
+</tr>
+<tr>
+<td>Waydroid apps can't reach the internet</td>
+<td>Docker's <code>FORWARD DROP</code> policy</td>
+<td>Section 2, "If web pages and logins don't work"</td>
+</tr>
+<tr>
+<td>Controller fine on desktop, dead in Android</td>
+<td>Pad node missing inside the container</td>
+<td><code>waydroid shell -- ls -l /dev/input/</code> — if there's no injected node, re-run <code>sudo /usr/local/bin/pad2touch-inject</code></td>
+</tr>
+</tbody>
+</table>
+<p>Two commands worth keeping handy:</p>
+<pre><code class="language-bash"># is the daemon crash-looping? any output here is the real problem
+journalctl -u pad2touch.service --since &quot;-15min&quot; | grep -c Traceback
+
+# what mapping did it actually resolve?
+journalctl -u pad2touch.service -n 6 --no-pager | grep bindings
+</code></pre>
+<p>Restarting after a config change:</p>
+<pre><code class="language-bash">sudo systemctl restart pad2touch.service
+sudo /usr/local/bin/pad2touch-inject     # required: a restart creates a new device node
+</code></pre>
+<hr />
+<h2 id="6-why-it-works-this-way">6. Why it works this way</h2>
+<p>You might reasonably ask why the mapping cannot simply live in an Android app.</p>
+<p>An Android app <strong>cannot read a controller while another app has focus</strong>. Android delivers input to
+the window that has focus, so a mapper either has to <em>be</em> the game (a "space"/virtualisation app, as
+Octopus does), run with <strong>root</strong>, or activate itself over <strong>ADB wireless debugging</strong>. Overlay mappers
+take the ADB route. Waydroid's GAPPS image has no <code>wlan0</code>, <code>svc wifi enable</code> leaves <em>Wi-Fi is
+disabled</em>, and <code>adb_wifi_enabled</code> resets to <code>0</code> — so that route is closed.</p>
+<p>What's left is the split this project uses:</p>
+<ul>
+<li>the <strong>app</strong> owns the data you'd want a UI for — coordinates, button bindings, and a
+  tap-to-capture overlay;</li>
+<li>the <strong>host daemon</strong> owns the input — it can read <code>/dev/input/event*</code> directly and produce a
+  virtual touchscreen, no Android permissions required.</li>
+</ul>
+<p>It also means the mapping keeps working if Android restarts, and that you can debug it with
+<code>journalctl</code> instead of logcat.</p>
+<hr />
+<h2 id="credits-and-licence">Credits and licence</h2>
+<p>MIT. Issues and pull requests: <strong>https://github.com/jkoehler11/waydroid-pad2touch</strong></p>
+<p>Waydroid itself: <a href="https://waydro.id">https://waydro.id</a> · docs: <a href="https://docs.waydro.id">https://docs.waydro.id</a></p>
+<p>Guide tested on Arch Linux (KDE/Wayland), Waydroid 1.6.3 with GAPPS, Xbox 360 pad, Pokémon UNITE
+Revival 1.0.1. Your distro's paths may differ slightly — <code>/usr/lib/waydroid/...</code> and
+<code>/var/lib/waydroid/...</code> are the two you'll touch most.</p>
+</main>
+</body>
+</html>

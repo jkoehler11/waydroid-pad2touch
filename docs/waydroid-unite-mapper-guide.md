@@ -353,13 +353,23 @@ current resolution at the top so you can spot a mismatch.
 |---|---|---|
 | Nothing responds after a button press | More than 9 multitouch slots in use — the allocator ran past slot 9 and corrupted the stream | Use the repo's daemon (fixed per-control slots) — this is already fixed upstream |
 | Movement stops when you press a button, or keeps going after you let go | The pad reports garbage axis values on button edges (real Xbox pads: `+1.00,+0.10` jumping to `-0.04,-0.09` in one sample) | Handled by spike rejection in the daemon; don't add axis "freezing" logic on top — it breaks releasing |
-| 1–2 second freezes, repeatedly | The daemon is crash-looping; each restart re-registers the touch device with Android | `journalctl -u pad2touch.service \| grep -c Traceback` — fix the traceback first, never tune coordinates around it |
-| Only some buttons work / bindings seem ignored | The config parser silently dropped unknown keys or non-numeric values | Compare `journalctl -u pad2touch.service \| grep bindings` with `/etc/pad2touch.conf`; they must match |
+| 1–2 second freezes, repeatedly | The daemon is crash-looping; each restart re-registers the touch device with Android | Check the daemon log for tracebacks (command below) — fix those first, never tune coordinates around them |
+| Only some buttons work / bindings seem ignored | The config parser silently dropped unknown keys or non-numeric values | Compare the daemon's startup `bindings:` line with `/etc/pad2touch.conf` — they must match exactly (command below) |
 | Touch works in menus but not in game | Coordinates are off — they're absolute pixels, not percentages | Re-capture that control |
 | Capture overlay opens the home screen instead of the game | The game's launcher activity is a downloader, not the game | Use the app from the repo, which targets the game activity directly |
 | App can't save: "permission denied" | The profile file is owned by `shell` (e.g. copied in with `adb push`) | Re-capture or save from the app; if it persists, see the README note on fixing ownership from inside the container |
 | Waydroid apps can't reach the internet | Docker's `FORWARD DROP` policy | Section 2, "If web pages and logins don't work" |
 | Controller fine on desktop, dead in Android | Pad node missing inside the container | `waydroid shell -- ls -l /dev/input/` — if there's no injected node, re-run `sudo /usr/local/bin/pad2touch-inject` |
+
+Two commands worth keeping handy:
+
+```bash
+# is the daemon crash-looping? any output here is the real problem
+journalctl -u pad2touch.service --since "-15min" | grep -c Traceback
+
+# what mapping did it actually resolve?
+journalctl -u pad2touch.service -n 6 --no-pager | grep bindings
+```
 
 Restarting after a config change:
 
