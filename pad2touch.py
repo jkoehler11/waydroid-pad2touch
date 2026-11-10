@@ -28,7 +28,7 @@ ABS_MT_PRESSURE = 0x3A
 ABS_MT_TRACKING_ID = 0x39
 ABS_X, ABS_Y, ABS_HAT0X, ABS_HAT0Y = 0x00, 0x01, 0x10, 0x11
 ABS_RX, ABS_RY = 0x03, 0x04          # right stick -> camera pan
-ABS_Z = 0x02                          # left trigger (LT)
+ABS_Z, ABS_RZ = 0x02, 0x05            # triggers: LT, RT
 
 BTN_SOUTH, BTN_EAST, BTN_NORTH, BTN_WEST = 0x130, 0x131, 0x133, 0x134
 BTN_TL, BTN_TR, BTN_SELECT, BTN_START = 0x136, 0x137, 0x13A, 0x13B
@@ -75,9 +75,15 @@ DEFAULTS = {
     # game only pans from there.
     "camera_cx": 1280, "camera_cy": 420,
     "camera_range": 220, "camera_deadzone": 0.25,
-    "select_x": 2370, "select_y": 828,
+    # Unite Move and Recall are their own slots (the app writes these names
+    # verbatim, so they must exist here or load_conf() silently drops them)
+    "lt_x": 2370, "lt_y": 828,
+    "recall_x": 2020, "recall_y": 1240,
     "start_x": 2430, "start_y": 120,
-    "tap_ms": 90,          # how long a synthetic tap stays down
+    "tap_ms": 90,
+    # per-slot controller bindings: any key listed here survives load_conf()
+    "bind_a": "A", "bind_b": "B", "bind_x": "X", "bind_y": "Y",
+    "bind_lb": "LB", "bind_lt": "LT", "bind_recall": "BACK",          # how long a synthetic tap stays down
 }
 
 
@@ -91,7 +97,12 @@ def load_conf():
             k, v = (s.strip() for s in line.split("=", 1))
             if k in conf:
                 try:
-                    conf[k] = float(v) if "." in v else int(v)
+                    # keep the default's type: bind_* are names ("RB"), not numbers,
+                    # and forcing int()/float() silently discarded them
+                    if isinstance(DEFAULTS[k], str):
+                        conf[k] = v.upper()
+                    else:
+                        conf[k] = float(v) if "." in v else int(v)
                 except ValueError:
                     log(f"ignoring bad value for {k}: {v!r}")
     return conf
@@ -266,6 +277,7 @@ def main():
     fast_reengage = False
     last_btn_at = 0.0
     last_key_at = 0.0
+    keys_down = False
     cam = [0.0, 0.0]
     cam_engaged = False
     cam_last = None
@@ -278,22 +290,33 @@ def main():
     BIND_CODES = {"A": 0x130, "B": 0x131, "X": 0x133, "Y": 0x134,
                   "LB": 0x136, "RB": 0x137, "L2": 0x138, "R2": 0x139,
                   "BACK": 0x13A, "START": 0x13B}
-    BIND_DEFAULT = {"a": "A", "lb": "LB", "rb": "RB", "x": "X",
-                    "y": "Y", "select": "LT", "recall": "BACK"}
-    SLOT_KEYS = {"a": ("a_x", "a_y"), "lb": ("lb_x", "lb_y"),
-                 "rb": ("rb_x", "rb_y"), "x": ("x_x", "x_y"),
-                 "y": ("y_x", "y_y"), "select": ("select_x", "select_y"),
+    # Slot names are identical to the app's field names: what the app shows is
+    # what this file holds is what this daemon presses. No renaming in between.
+    BIND_DEFAULT = {"a": "A", "b": "B", "x": "X", "y": "Y",
+                    "lb": "LB", "lt": "LT", "recall": "BACK"}
+    SLOT_KEYS = {"a": ("a_x", "a_y"), "b": ("b_x", "b_y"),
+                 "x": ("x_x", "x_y"), "y": ("y_x", "y_y"),
+                 "lb": ("lb_x", "lb_y"), "lt": ("lt_x", "lt_y"),
                  "recall": ("recall_x", "recall_y")}
     buttons = {}
     trig_slots = {}
     for _slot, _keys in SLOT_KEYS.items():
         _name = str(conf.get("bind_" + _slot, BIND_DEFAULT[_slot])).upper()
         if _name in ("LT", "RT"):
-            trig_slots[_name] = _keys          # analog triggers: axis path
+            trig_slots[_name] = _keys          # analog path (ABS_Z / ABS_RZ)
+            # some pads report their triggers as digital buttons instead;
+            # register both so a trigger binding works either way
+            _tcode = BIND_CODES.get("L2" if _name == "LT" else "R2")
+            if _tcode:
+                buttons[_tcode] = _keys
             continue
         _code = BIND_CODES.get(_name)
         if _code:
             buttons[_code] = _keys
+    log("bindings: " + ", ".join(
+        "%s=%s(%s,%s)" % (str(conf.get("bind_" + sl, BIND_DEFAULT[sl])).upper(), sl,
+                          conf.get(SLOT_KEYS[sl][0], "?"), conf.get(SLOT_KEYS[sl][1], "?"))
+        for sl in SLOT_KEYS))
     log("running" + (" (debug)" if DEBUG else ""))
     try:
         while True:
@@ -314,7 +337,12 @@ def main():
                     cam[0] = crx / 32767.0
                 if cry is not None:
                     cam[1] = cry / 32767.0
-                if (time.time() - last_key_at) >= 0.20:
+                try:
+                    _ks = fcntl.ioctl(pad, EVIOCGKEY(96), b"\0" * 96)
+                    keys_down = any((_ks[k // 8] >> (k % 8)) & 1 for k in BIND_CODES.values())
+                except OSError:
+                    keys_down = False
+                if not keys_down and (time.time() - last_key_at) >= 0.15:
                     if rx is not None:
                         stick[0] = rx / 32767.0
                     if ry is not None:
@@ -327,7 +355,7 @@ def main():
                 # This pad reports 0 on the stick axes around any button event;
                 # that fake centre is what killed movement. Ignore near-zero
                 # reports for a short window, but always honour real deflection.
-                axis_ok = (time.time() - last_key_at) >= 0.20
+                axis_ok = (not keys_down) and (time.time() - last_key_at) >= 0.15
                 if code in (ABS_RX, ABS_RY):
                     if axis_ok:
                         cam[0 if code == ABS_RX else 1] = value / 32767.0
@@ -376,16 +404,6 @@ def main():
                         elif not pressed and tag in held:
                             held.pop(tag, None)
                             ts.release(8)
-                elif etype == EV_KEY and code == BTN_TL and BTN_TL not in buttons:
-                    # left shoulder: a wide tap zone, kept as a point for simplicity
-                    if value:
-                        last_btn_at = time.time()
-                        held[code] = 7
-                        ts.touch(7, conf["lb_x"] + conf["lb_w"] / 2, conf["lb_y"] + conf["lb_h"] / 2)
-                    else:
-                        held.pop(code, None)
-                        ts.release(7)
-
             # stick -> virtual joystick (one finger, slot 0)
             #
             # Games with a "floating" joystick treat the touch-down point as the
@@ -439,6 +457,9 @@ def main():
                     center_since = time.time()
                 if (time.time() - center_since) >= 0.15:
                     ts.release(0)
+                    # a release forced by the pad's axis artefact should re-engage
+                    # instantly: no 60 ms landing pause on the way back
+                    fast_reengage = (time.time() - last_key_at) < 1.0
                     moving = False
                     last_move = None
                     center_since = 0.0
