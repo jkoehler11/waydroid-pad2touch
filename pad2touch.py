@@ -312,8 +312,8 @@ def main():
                   "BACK": 0x13A, "START": 0x13B}
     # Slot names are identical to the app's field names: what the app shows is
     # what this file holds is what this daemon presses. No renaming in between.
-    BIND_DEFAULT = {"a": "A", "b": "B", "x": "X", "y": "Y",
-                    "lb": "LB", "lt": "LT", "recall": "BACK"}
+    BIND_DEFAULT = {"a": "B", "b": "RT", "x": "RB", "y": "X",
+                    "lb": "Y", "lt": "LT", "recall": "BACK"}
     # fixed MT slot per control. Slots are 0-9 ONLY: scanning for a free slot
     # could land on 10 and corrupt the whole multitouch stream, which showed up as
     # "after pressing a button nothing works at all".

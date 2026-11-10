@@ -125,6 +125,11 @@ public class MainActivity extends Activity {
         save.setOnClickListener(v -> save());
         root.addView(save);
 
+        Button defaultBinds = new Button(this);
+        defaultBinds.setText("Apply default button mappings");
+        defaultBinds.setOnClickListener(v -> applyDefaultBindings());
+        root.addView(defaultBinds);
+
         Button capture = new Button(this);
         capture.setText("Capture coordinates by tapping the game");
         capture.setOnClickListener(v -> startCapture());
@@ -147,15 +152,25 @@ public class MainActivity extends Activity {
 
     private static String defaultBind(String key) {
         switch (key) {
-            case "a":  return "A";      // basic attack
-            case "b":  return "RB";     // move 2
-            case "x":  return "LB";     // move 1
-            case "y":  return "Y";      // battle item
-            case "lb": return "X";      // score
+            case "a":  return "B";      // basic attack
+            case "b":  return "RT";     // move 2
+            case "x":  return "RB";     // move 1
+            case "y":  return "X";      // battle item
+            case "lb": return "Y";      // score
             case "lt": return "LT";     // Unite Move
             case "recall": return "BACK"; // teleport to base
             default:   return null;     // movement / camera use the sticks
         }
+    }
+
+    /** Put every dropdown back to its default binding (coordinates untouched). */
+    private void applyDefaultBindings() {
+        for (java.util.Map.Entry<String, android.widget.Spinner> e : bindSpinners.entrySet()) {
+            String d = defaultBind(e.getKey());
+            if (d != null) e.getValue().setSelection(indexOf(BIND_OPTIONS, d));
+        }
+        Toast.makeText(this, "Default button mappings applied — Save to keep them",
+                Toast.LENGTH_LONG).show();
     }
 
     private static int indexOf(String[] arr, String v) {
