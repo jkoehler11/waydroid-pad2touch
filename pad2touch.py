@@ -278,6 +278,26 @@ def main():
     last_btn_at = 0.0
     last_key_at = 0.0
     keys_down = False
+    # single-sample spike rejection for the axes (see set_axis)
+    _pending = {}
+
+    def set_axis(container, idx, raw):
+        """Apply an axis sample unless it is a one-off spike.
+
+        This pad jumps the stick by up to 2.0 in one report around a button
+        press. Real movement is continuous, so a big jump is held back until a
+        second sample confirms it (100 ms later) and otherwise discarded.
+        """
+        new_v = raw / 32767.0
+        cur = container[idx]
+        if abs(new_v - cur) > 0.5:
+            key = (id(container), idx)
+            p = _pending.get(key)
+            if p is None or abs(p - new_v) > 0.5:
+                _pending[key] = new_v
+                return
+            _pending.pop(key, None)
+        container[idx] = new_v
     cam = [0.0, 0.0]
     cam_engaged = False
     cam_last = None
@@ -338,9 +358,9 @@ def main():
                 rx, ry = read_abs(pad, ABS_X), read_abs(pad, ABS_Y)
                 crx, cry = read_abs(pad, ABS_RX), read_abs(pad, ABS_RY)
                 if crx is not None:
-                    cam[0] = crx / 32767.0
+                    set_axis(cam, 0, crx)
                 if cry is not None:
-                    cam[1] = cry / 32767.0
+                    set_axis(cam, 1, cry)
                 try:
                     _ks = fcntl.ioctl(pad, EVIOCGKEY(96), b"\0" * 96)
                     keys_down = any((_ks[k // 8] >> (k % 8)) & 1 for k in BIND_CODES.values())
@@ -356,9 +376,9 @@ def main():
                             held.pop(_c, None)
                 if not keys_down and (time.time() - last_key_at) >= 0.15:
                     if rx is not None:
-                        stick[0] = rx / 32767.0
+                        set_axis(stick, 0, rx)
                     if ry is not None:
-                        stick[1] = ry / 32767.0
+                        set_axis(stick, 1, ry)
                 last_resync = time.time()
             for off in range(0, len(data) - INPUT_EVENT.size + 1, INPUT_EVENT.size):
                 _, _, etype, code, value = INPUT_EVENT.unpack_from(data, off)
@@ -370,10 +390,10 @@ def main():
                 axis_ok = (not keys_down) and (time.time() - last_key_at) >= 0.15
                 if code in (ABS_RX, ABS_RY):
                     if axis_ok:
-                        cam[0 if code == ABS_RX else 1] = value / 32767.0
+                        set_axis(cam, 0 if code == ABS_RX else 1, value)
                 elif code in (ABS_X, ABS_Y):
                     if axis_ok:
-                        stick[0 if code == ABS_X else 1] = value / 32767.0
+                        set_axis(stick, 0 if code == ABS_X else 1, value)
                 elif code == ABS_HAT0X:
                     # d-pad keeps its own state: a button press makes many pads
                     # re-report the hat at 0,0, and sharing the variables wiped the
