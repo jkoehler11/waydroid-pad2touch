@@ -294,6 +294,10 @@ def main():
     # what this file holds is what this daemon presses. No renaming in between.
     BIND_DEFAULT = {"a": "A", "b": "B", "x": "X", "y": "Y",
                     "lb": "LB", "lt": "LT", "recall": "BACK"}
+    # fixed MT slot per control. Slots are 0-9 ONLY: scanning for a free slot
+    # could land on 10 and corrupt the whole multitouch stream, which showed up as
+    # "after pressing a button nothing works at all".
+    SLOT_MT = {"a": 1, "b": 2, "x": 3, "y": 4, "lb": 5, "lt": 6, "recall": 7}
     SLOT_KEYS = {"a": ("a_x", "a_y"), "b": ("b_x", "b_y"),
                  "x": ("x_x", "x_y"), "y": ("y_x", "y_y"),
                  "lb": ("lb_x", "lb_y"), "lt": ("lt_x", "lt_y"),
@@ -308,11 +312,11 @@ def main():
             # register both so a trigger binding works either way
             _tcode = BIND_CODES.get("L2" if _name == "LT" else "R2")
             if _tcode:
-                buttons[_tcode] = _keys
+                buttons[_tcode] = (_keys[0], _keys[1], SLOT_MT[_slot])
             continue
         _code = BIND_CODES.get(_name)
         if _code:
-            buttons[_code] = _keys
+            buttons[_code] = (_keys[0], _keys[1], SLOT_MT[_slot])
     log("bindings: " + ", ".join(
         "%s=%s(%s,%s)" % (str(conf.get("bind_" + sl, BIND_DEFAULT[sl])).upper(), sl,
                           conf.get(SLOT_KEYS[sl][0], "?"), conf.get(SLOT_KEYS[sl][1], "?"))
@@ -342,6 +346,14 @@ def main():
                     keys_down = any((_ks[k // 8] >> (k % 8)) & 1 for k in BIND_CODES.values())
                 except OSError:
                     keys_down = False
+                if keys_down:
+                    pass
+                else:
+                    for _c, _s in list(held.items()):
+                        if isinstance(_c, int) and _c in BIND_CODES.values() and \
+                                not ((_ks[_c // 8] >> (_c % 8)) & 1):
+                            ts.release(_s)
+                            held.pop(_c, None)
                 if not keys_down and (time.time() - last_key_at) >= 0.15:
                     if rx is not None:
                         stick[0] = rx / 32767.0
@@ -374,18 +386,19 @@ def main():
                     last_key_at = time.time()
                     if DEBUG:
                         log(f"btn {hex(code)} value={value} stick=({stick[0]:+.2f},{stick[1]:+.2f}) hat=({hat[0]:+.0f},{hat[1]:+.0f})")
-                    kx, ky = buttons[code]
+                    kx, ky, mt = buttons[code]
                     if conf.get(kx, -1) < 0:          # button has no touch target
                         continue
                     if value:
                         last_btn_at = time.time()
                         if code in held:      # repeat event, already pressed
                             continue
-                        slot = 1
-                        while slot in held.values() or slot in (7, 8, 9):
-                            slot += 1
-                        held[code] = slot
-                        ts.touch(slot, conf[kx], conf[ky])
+                        for _c, _s in list(held.items()):
+                            if _s == mt and isinstance(_c, int):
+                                ts.release(mt)
+                                held.pop(_c, None)
+                        held[code] = mt
+                        ts.touch(mt, conf[kx], conf[ky])
                     else:
                         slot = held.pop(code, None)
                         if slot is not None:
@@ -397,13 +410,14 @@ def main():
                     if keys is not None:
                         pressed = value > 100
                         tag = which + "_slot"
+                        _tmt = keys[2] if len(keys) > 2 else 6
                         if pressed and tag not in held:
                             last_btn_at = time.time()
-                            held[tag] = 8
-                            ts.touch(8, conf.get(keys[0], -1), conf.get(keys[1], -1))
+                            held[tag] = _tmt
+                            ts.touch(_tmt, conf.get(keys[0], -1), conf.get(keys[1], -1))
                         elif not pressed and tag in held:
                             held.pop(tag, None)
-                            ts.release(8)
+                            ts.release(_tmt)
             # stick -> virtual joystick (one finger, slot 0)
             #
             # Games with a "floating" joystick treat the touch-down point as the
@@ -455,7 +469,11 @@ def main():
                 # the stick moved again, so wait for a sustained centre.
                 if center_since == 0.0:
                     center_since = time.time()
-                if (time.time() - center_since) >= 0.15:
+                # 0.15 s was too eager: this pad reports centre for a few hundred
+                # ms around every button event, and each bogus release forces the
+                # game to re-grab the joystick (that reads as "can't move again").
+                # 0.6 s costs nothing in feel but rides out the artefact.
+                if (time.time() - center_since) >= 0.60:
                     ts.release(0)
                     # a release forced by the pad's axis artefact should re-engage
                     # instantly: no 60 ms landing pause on the way back
