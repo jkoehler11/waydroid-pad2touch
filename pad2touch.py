@@ -235,6 +235,7 @@ def open_pad():
 
 
 EVIOCGABS = lambda code: (2 << 30) | (24 << 16) | (ord("E") << 8) | (0x40 + code)
+EVIOCGKEY = lambda nbytes: (2 << 30) | (nbytes << 16) | (ord("E") << 8) | 0x18
 ABSINFO = struct.Struct("<iiiiii")
 
 
@@ -263,18 +264,36 @@ def main():
     last_resync = 0.0
     lt_held = False
     fast_reengage = False
+    last_btn_at = 0.0
+    last_key_at = 0.0
     cam = [0.0, 0.0]
     cam_engaged = False
     cam_last = None
     cam_last_emit = 0.0
     cam_engaged_at = 0.0
     held = {}          # btn code -> slot
-    buttons = {
-        BTN_SOUTH: ("a_x", "a_y"), BTN_EAST: ("b_x", "b_y"),
-        BTN_NORTH: ("y_x", "y_y"), BTN_WEST: ("x_x", "x_y"),
-        BTN_SELECT: ("select_x", "select_y"), BTN_TR: ("rb_x", "rb_y"),
-        BTN_START: ("start_x", "start_y"),
-    }
+    # Which physical button drives which touch target is configurable
+    # (bind_a / bind_lb / bind_rb / bind_x / bind_y / bind_select), so a user can
+    # match the layout they are used to instead of editing this file.
+    BIND_CODES = {"A": 0x130, "B": 0x131, "X": 0x133, "Y": 0x134,
+                  "LB": 0x136, "RB": 0x137, "L2": 0x138, "R2": 0x139,
+                  "BACK": 0x13A, "START": 0x13B}
+    BIND_DEFAULT = {"a": "A", "lb": "LB", "rb": "RB", "x": "X",
+                    "y": "Y", "select": "LT", "recall": "BACK"}
+    SLOT_KEYS = {"a": ("a_x", "a_y"), "lb": ("lb_x", "lb_y"),
+                 "rb": ("rb_x", "rb_y"), "x": ("x_x", "x_y"),
+                 "y": ("y_x", "y_y"), "select": ("select_x", "select_y"),
+                 "recall": ("recall_x", "recall_y")}
+    buttons = {}
+    trig_slots = {}
+    for _slot, _keys in SLOT_KEYS.items():
+        _name = str(conf.get("bind_" + _slot, BIND_DEFAULT[_slot])).upper()
+        if _name in ("LT", "RT"):
+            trig_slots[_name] = _keys          # analog triggers: axis path
+            continue
+        _code = BIND_CODES.get(_name)
+        if _code:
+            buttons[_code] = _keys
     log("running" + (" (debug)" if DEBUG else ""))
     try:
         while True:
@@ -295,19 +314,26 @@ def main():
                     cam[0] = crx / 32767.0
                 if cry is not None:
                     cam[1] = cry / 32767.0
-                if rx is not None:
-                    stick[0] = rx / 32767.0
-                if ry is not None:
-                    stick[1] = ry / 32767.0
+                if (time.time() - last_key_at) >= 0.20:
+                    if rx is not None:
+                        stick[0] = rx / 32767.0
+                    if ry is not None:
+                        stick[1] = ry / 32767.0
                 last_resync = time.time()
             for off in range(0, len(data) - INPUT_EVENT.size + 1, INPUT_EVENT.size):
                 _, _, etype, code, value = INPUT_EVENT.unpack_from(data, off)
                 if etype != EV_ABS and etype != EV_KEY:
                     continue
+                # This pad reports 0 on the stick axes around any button event;
+                # that fake centre is what killed movement. Ignore near-zero
+                # reports for a short window, but always honour real deflection.
+                axis_ok = (time.time() - last_key_at) >= 0.20
                 if code in (ABS_RX, ABS_RY):
-                    cam[0 if code == ABS_RX else 1] = value / 32767.0
+                    if axis_ok:
+                        cam[0 if code == ABS_RX else 1] = value / 32767.0
                 elif code in (ABS_X, ABS_Y):
-                    stick[0 if code == ABS_X else 1] = value / 32767.0
+                    if axis_ok:
+                        stick[0 if code == ABS_X else 1] = value / 32767.0
                 elif code == ABS_HAT0X:
                     # d-pad keeps its own state: a button press makes many pads
                     # re-report the hat at 0,0, and sharing the variables wiped the
@@ -317,20 +343,16 @@ def main():
                 elif code == ABS_HAT0Y:
                     hat[1] = float(value)
                 elif etype == EV_KEY and code in buttons:
+                    last_key_at = time.time()
                     if DEBUG:
                         log(f"btn {hex(code)} value={value} stick=({stick[0]:+.2f},{stick[1]:+.2f}) hat=({hat[0]:+.0f},{hat[1]:+.0f})")
                     kx, ky = buttons[code]
                     if conf.get(kx, -1) < 0:          # button has no touch target
                         continue
-                    if value and moving:
-                        # hand the single touch over: stop the stick, press the
-                        # button, and let the loop re-engage the stick below
-                        ts.release(0)
-                        moving = False
-                        last_move = None
-                        center_since = 0.0
-                        fast_reengage = True   # no 60 ms pause on the way back
                     if value:
+                        last_btn_at = time.time()
+                        if code in held:      # repeat event, already pressed
+                            continue
                         slot = 1
                         while slot in held.values() or slot in (7, 8, 9):
                             slot += 1
@@ -340,18 +362,24 @@ def main():
                         slot = held.pop(code, None)
                         if slot is not None:
                             ts.release(slot)
-                elif code == ABS_Z:
+                elif code in (ABS_Z, ABS_RZ):
                     # analog trigger acts as a button: >40% counts as pressed
-                    pressed = value > 100
-                    if pressed and not lt_held:
-                        lt_held = True
-                        ts.touch(8, conf.get("select_x", 2370), conf.get("select_y", 828))
-                    elif not pressed and lt_held:
-                        lt_held = False
-                        ts.release(8)
-                elif etype == EV_KEY and code == BTN_TL:
+                    which = "LT" if code == ABS_Z else "RT"
+                    keys = trig_slots.get(which)
+                    if keys is not None:
+                        pressed = value > 100
+                        tag = which + "_slot"
+                        if pressed and tag not in held:
+                            last_btn_at = time.time()
+                            held[tag] = 8
+                            ts.touch(8, conf.get(keys[0], -1), conf.get(keys[1], -1))
+                        elif not pressed and tag in held:
+                            held.pop(tag, None)
+                            ts.release(8)
+                elif etype == EV_KEY and code == BTN_TL and BTN_TL not in buttons:
                     # left shoulder: a wide tap zone, kept as a point for simplicity
                     if value:
+                        last_btn_at = time.time()
                         held[code] = 7
                         ts.touch(7, conf["lb_x"] + conf["lb_w"] / 2, conf["lb_y"] + conf["lb_h"] / 2)
                     else:
@@ -367,7 +395,11 @@ def main():
             vx = max(-1.0, min(1.0, stick[0] + hat[0]))
             vy = max(-1.0, min(1.0, stick[1] + hat[1]))
             mag = (vx ** 2 + vy ** 2) ** 0.5
+            btn_down = bool(held)
+            # Zeroed axes only count as "still holding" while a button event is
+            # fresh: press, hold, and the ~1 s aftermath all keep the gesture.
             if mag > conf["deadzone"]:
+                center_since = 0.0          # real deflection: never arm a release
                 nx, ny = vx / mag, vy / mag
                 scale = min(mag, 1.0)          # proportional, not always full tilt
                 x = conf["move_cx"] + nx * conf["move_radius"] * scale
@@ -393,7 +425,8 @@ def main():
                 # stick is moved again.
                 if drag_ready and (last_move is None or now - last_emit >= 0.03
                                    or abs(x - last_move[0]) > 1 or abs(y - last_move[1]) > 1):
-                    ts.move(0, x, y)
+                    j = 1 if int(now * 10) & 1 else -1
+                    ts.move(0, x + j, y - j)
                     last_move = (x, y)
                     last_emit = now
                     if DEBUG:
