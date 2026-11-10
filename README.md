@@ -1,127 +1,220 @@
 # pad2touch + Unite Mapper — gamepad on touch-only Android games in Waydroid
 
-Two pieces that work together:
+Give a physical controller to an Android game that has no controller support, running in Waydroid.
 
-1. **Unite Mapper** — a tiny Android app where you type the screen coordinates of each control.
-   No menus to learn, no drag-and-drop, no overlay, no accessibility service, no adb pairing.
-2. **pad2touch** — the host daemon that turns your gamepad into touches at those coordinates.
-
-The split exists because of a hard limit: **an Android app cannot read the gamepad while another app
-(the game) holds focus** without root or a paired wireless-debug session. That's why every overlay
-mapper demands ADB activation. This project puts the configurable part in an app and the injection
-on the host, where it always works.
+**Unite Mapper** is a small Android app that owns the data: the screen position of every control and
+which controller button fires it — with a tap-to-capture overlay so you never guess pixels.
+**pad2touch** is a host daemon that reads the gamepad and produces a real multitouch device positioned
+at those coordinates.
 
 ```
-gamepad ──► pad2touch (host, uinput) ──► Pad2Touch touchscreen ──► injected into Waydroid ──► game
-                     ▲
-                     └── /etc/pad2touch.conf ◄── unite-profile-sync ◄── Unite Mapper app (JSON)
+   gamepad (/dev/input/eventN)
+        │  udev symlink
+        ▼
+  /dev/waydroid-gamepad ──► pad2touch (host, root, uinput)
+                                  │
+                                  ▼
+                     Pad2Touch virtual touchscreen
+                                  │  node injected into the container
+                                  ▼
+                   /dev/input/event21 ──► Android ──► the game sees a finger
+
+  Unite Mapper (app) ──► unite_profile.json ──► unite-profile-sync (host, every 20 s)
+                                                    │
+                                                    ▼
+                                          /etc/pad2touch.conf ──► pad2touch
 ```
 
-Waydroid forwards keyboard and pointer from the host, and it will happily pass a controller
-through as a real joystick — but an Android game that only reads touches never looks at it.
-Pokémon UNITE is one of those: the mobile client has no controller settings at all.
+## Why the split
 
-`pad2touch` creates a **real multitouch device** with Linux `uinput`, named `Pad2Touch`, and
-translates stick and button input into touch events at configurable screen positions. The game
-cannot tell the difference from a finger.
+An Android app **cannot** read a controller while another app holds focus without root or a paired
+wireless-debug session — which is why every Play Store overlay mapper makes you enable wireless
+debugging. Waydroid's GAPPS image has no Wi-Fi interface at all (`svc wifi enable` leaves *Wi-Fi is
+disabled*, and `adb_wifi_enabled` resets to `0`), so that route is closed.
 
-```
-gamepad ──► pad2touch ──► /dev/uinput (Pad2Touch) ──► injected into Waydroid ──► game sees touches
-```
-
----
+The app therefore owns what a UI is good for (coordinates, bindings, capture) and the host owns the
+input, where reading `/dev/input/*` and creating a touchscreen need no Android permissions at all.
 
 ## What's in here
 
 | Path | What it is |
 |---|---|
-| `pad2touch.py` | The mapper. Creates the virtual touchscreen, reads the pad, emits touches. stdlib only, runs as root. |
-| `pad2touch.conf.example` | Config: joystick centre/radius and a screen position for every button. |
-| `waydroid-host-fix.sh` | Fixes the two host problems that make Waydroid look broken: Docker's `FORWARD DROP` killing the container's internet, and gamepad injection. `check` / `fix` / `uninstall`. |
-| `docs/waydroid-no-internet-docker-fix.md` | Write-up of the networking bug, for sharing. |
-| `docs/steamdeck-waydroid-guide.md` | End-to-end Steam Deck walkthrough: installing Waydroid, installing a game, the networking fix, and this controller mapping. |
-| `app/` | **Unite Mapper** — Android app source (one Activity, no dependencies) + `build.sh` (SDK only, no Gradle). |
-| `apk/UniteMapper.apk` | Pre-built app (12 KB). Sideload with `waydroid app install`. |
-| `host/unite-profile-sync` | Pulls the app's profile over adb, rewrites `/etc/pad2touch.conf`, restarts the daemon, re-injects the touch device. |
-| `host/waydroid-adb-connect` | Keeps an adb link from the host to the container, re-established on every Waydroid start. |
-| `systemd/`, `udev/` | Unit and rule files, if you'd rather install by hand than run the script. |
+| `app/` | **Unite Mapper** source — `MainActivity.java` (form, bindings, capture button), `CaptureService.java` (overlay), `build.sh` (SDK only: no Gradle, no AndroidX, no network). |
+| `apk/UniteMapper.apk` | Pre-built app (~20 KB). `waydroid app install apk/UniteMapper.apk`. |
+| `pad2touch.py` | The mapper: virtual touchscreen, pad reading, button→touch translation. stdlib only, root. |
+| `pad2touch.conf.example` | Config reference (the app normally writes this for you). |
+| `host/unite-profile-sync` | Pulls the app's profile over adb, rewrites `/etc/pad2touch.conf`, restarts the daemon, re-injects the device. |
+| `host/waydroid-adb-connect` | Keeps a host→container adb link, re-established on each Waydroid start. |
+| `waydroid-host-fix.sh` | Host fixes: Docker's `FORWARD DROP` killing container internet, and gamepad passthrough. `check` / `fix` / `uninstall`. |
+| `systemd/`, `udev/` | Units and rules, if you prefer installing by hand. |
+| `docs/waydroid-unite-mapper-guide.md` | **Full shareable guide** — Waydroid install per distro, controller, app setup, troubleshooting. HTML rendering alongside it. |
+| `docs/waydroid-no-internet-docker-fix.md` | The networking bug, explained for sharing. |
+| `docs/steamdeck-waydroid-guide.md` | Steam Deck walkthrough. |
 
----
+## Quick start
 
-## Quick start (Arch/KDE host with Waydroid already working)
+Assumes Waydroid is already running and you can play the game with a mouse. Four steps.
 
 ```bash
-# 1. host fixes: container internet (Docker) + gamepad visibility
+# 1 — host fixes: container internet (Docker's FORWARD DROP) + gamepad passthrough
 sudo ./waydroid-host-fix.sh check
 sudo ./waydroid-host-fix.sh fix
 
-# 2. the touch mapper
+# 2 — the mapper daemon
 sudo install -m 755 pad2touch.py /usr/local/bin/pad2touch.py
+sudo install -m 755 pad2touch-inject /usr/local/bin/pad2touch-inject
 sudo cp pad2touch.conf.example /etc/pad2touch.conf
 sudo cp systemd/pad2touch.service systemd/pad2touch-inject.service /etc/systemd/system/
 sudo cp udev/99-waydroid-touch-trigger.rules /etc/udev/rules.d/
 sudo systemctl daemon-reload && sudo udevadm control --reload-rules
 sudo systemctl enable --now pad2touch.service
 sudo systemctl start pad2touch-inject.service
-```
 
-Verify inside the container — you want a device with `TOUCHSCREEN` sources and a real size:
-
-```bash
-waydroid adb connect
-adb -s 192.168.240.112:5555 shell dumpsys input | grep -A3 Pad2Touch
-# size 2560x1396, orientation 0, mode 1, sources=TOUCHSCREEN | STYLUS
-```
-
-Then edit `/etc/pad2touch.conf` and `sudo systemctl restart pad2touch`.
-
----
-
-## The Unite Mapper app
-
-Install it and type coordinates — that's the whole workflow:
-
-```bash
+# 3 — the app, and the host half that feeds it
 waydroid app install apk/UniteMapper.apk
-```
-
-One row per control (movement stick + radius, A, B, X, Y, LB, LT, camera), each with X and Y fields.
-**Load measured defaults** fills in the values measured off a live Pokémon UNITE match on a
-2560×1396 surface; **Save profile** writes JSON to the app's own storage.
-
-Then the host side, once:
-
-```bash
+waydroid shell "appops set com.koehler.unitemapper SYSTEM_ALERT_WINDOW allow"
 sudo install -m 755 host/unite-profile-sync /usr/local/bin/
 sudo cp systemd/unite-profile-sync.service systemd/unite-profile-sync.timer /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now unite-profile-sync.timer
 ```
 
-From then on the timer polls every 20 s, and when the profile changes it rewrites
-`/etc/pad2touch.conf`, restarts `pad2touch`, and re-injects the touch device into the container. Save
-in the app, and the controller uses the new coordinates within ~20 seconds.
+4 — open **Unite Mapper** in Waydroid, press **Capture coordinates by tapping the game**, and tap
+the nine controls as the bar names them. It saves; the host applies it within ~20 seconds.
 
-The app's labels are mapped **by meaning** onto the daemon's Switch-style layout — app *x* (Ice
-Shard) drives LB (move 1), app *lb* (score) drives X, app *b* (Whirlpool) drives RB (move 2) — so the
-form reads the way the game's HUD does rather than the way the config file does.
+Verify at any point:
 
-Build it yourself instead of using the APK: `cd app && ./build.sh` (needs only the Android SDK; no
-Gradle, no AndroidX, no network).
+```bash
+# Android sees the virtual touchscreen and the pad
+waydroid shell "dumpsys input" | grep -A2 Pad2Touch
+waydroid shell "dumpsys input" | grep -i "x-box"
 
-### Why the app doesn't do the mapping itself
+# the daemon is up and resolved the config you expect
+systemctl is-active pad2touch.service
+journalctl -u pad2touch.service -n 6 --no-pager | grep bindings
+```
 
-It can't, on stock Android. Reading a controller while another app has focus requires either root or
-a paired wireless-debug session, and injecting touches requires an accessibility service or root.
-Both routes are what overlay mappers make you set up — and on Waydroid's GAPPS image wireless
-debugging cannot be enabled at all (no Wi-Fi interface; `svc wifi enable` leaves "Wi-Fi is disabled").
-Keeping the injection on the host sidesteps every one of those requirements.
+## The app
 
-## Three things that will bite you
+### Rows
 
-**Never `adb push` into the app's own files directory.** `adb push` writes as `shell`, so
-`Android/data/com.koehler.unitemapper/files/unite_profile.json` ends up owned by uid 2000 — the app
-then gets `EACCES` when it tries to save ("permission denied"). If you need to seed a profile, do it
-from the app, or fix ownership afterwards from inside the container namespace:
+One row per control — **Basic attack, Move 1, Move 2, Battle item, Score, Unite Move, Recall /
+teleport to base, Movement stick centre, Camera area** — each with an X and Y field, a stick radius,
+and a dropdown for the controller button.
+
+### Capture
+
+`Capture coordinates by tapping the game` starts a nearly transparent overlay over the running game
+(the game keeps running; taps are swallowed so nothing is cast) and prompts for nine taps:
+
+`Basic attack → Move 1 → Move 2 → Battle item → Score → Unite Move → Recall → joystick centre → camera area`
+
+Cancel with the bottom-left corner. The ninth tap saves automatically.
+
+### Bindings
+
+The dropdowns offer `none, A, B, X, Y, LB, RB, LT, RT, START, BACK`. `none` disables that control.
+**Apply default button mappings** resets only the dropdowns; **Load measured defaults** resets
+coordinates *and* bindings, so avoid it once you've captured.
+
+Shipped defaults (Switch-style):
+
+| Row | Default button |
+|---|---|
+| Basic attack | B |
+| Move 1 | RB |
+| Move 2 | RT |
+| Battle item | X |
+| Score | Y |
+| Unite Move | LT |
+| Recall | BACK |
+
+Coordinates are **1:1 with the config**: the app's keys are `a, b, x, y, lb, lt, recall`, the file
+holds `a_x/a_y … recall_x/recall_y`, and the daemon binds `bind_<same name>`. There is no renaming
+layer between what you type and what gets pressed.
+
+### Default coordinates
+
+Measured on a 2560×1366 surface, in case you want to start from them:
+
+| Control | X | Y |
+|---|---|---|
+| Movement stick centre | 410 | 1048 |
+| Basic attack | 2428 | 1228 |
+| Move 1 | 2167 | 1011 |
+| Move 2 | 2080 | 1180 |
+| Battle item | 2164 | 1265 |
+| Score | 1638 | 1218 |
+| Unite Move | 2370 | 828 |
+| Recall | 1700 | 1300 |
+| Camera area | 1280 | 420 |
+
+Everything here is game- and resolution-specific. The coordinates are absolute pixels: resize the
+Waydroid window and they need re-capturing (the touch device is rebuilt to the new size
+automatically; the numbers are not).
+
+## How the mapping behaves
+
+- **Land, then drag.** A floating joystick treats the touch-down point as its origin, so a finger that
+  appears already displaced reads as one lurch and no steering. The mapper lands at the stick centre
+  and drags outward.
+- **Proportional throw.** Half tilt creeps, full tilt runs — the radius scales with stick magnitude.
+  Shrinking the radius to fix overshoot is a trap: too small and full deflection falls inside the
+  game's deadzone, which reads as "movement stopped working".
+- **Heartbeat.** Stick position is re-sent every ~30 ms even when unchanged, because a button press
+  occupies another finger and an idle stick makes the game drop the gesture.
+- **Spike rejection.** Cheap pads report garbage axes on button edges (measured on a 360 pad: a steady
+  `+1.00,+0.10` dropping to `-0.04,-0.09` in one sample). Samples that jump more than 0.5 are held
+  back until the next sample confirms them (~100 ms), so movement survives button presses.
+- **Fixed multitouch slots.** Controls own slots `a=1 b=2 x=3 y=4 lb=5 lt=6 recall=7`, stick on 0,
+  camera on 9. Multitouch slots only go up to 9 — an allocator that scans for a free slot can run
+  past it and corrupt the whole touch stream, which looks like "after pressing a button nothing works".
+
+## Config reference
+
+`/etc/pad2touch.conf`, generated by the sync script:
+
+```ini
+width = 2560            height = 1366          # must match the live surface
+move_cx = 410           move_cy = 1048         # stick centre
+move_radius = 120       deadzone = 0.18
+a_x = 2428              a_y = 1228             # …one pair per control
+camera_cx = 1280        camera_cy = 420
+camera_range = 220      camera_deadzone = 0.25
+bind_a = B              bind_recall = BACK     # controller button per control
+```
+
+After editing by hand:
+
+```bash
+sudo systemctl restart pad2touch.service
+sudo /usr/local/bin/pad2touch-inject    # required: a restart creates a new device node
+```
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Nothing responds after a button press | More than 9 MT slots in use | Update — slots are fixed per control now |
+| Movement stops on button press, or continues after release | Pad emits axis spikes on button edges | Handled by spike rejection; don't add axis gating — it freezes the stick |
+| 1–2 s freezes, repeatedly | Daemon crash-looping; each restart re-registers the device | Check for tracebacks (below) before anything else |
+| Bindings seem ignored | Config parser dropped unknown/non-numeric keys | Compare the startup `bindings:` line with the conf |
+| Works in menus, nothing in game | Coordinates are absolute pixels and slightly off | Re-capture |
+| Capture opens the home screen | Launcher activity is a downloader, not the game | Use this app, which targets the game activity directly |
+| App can't save: "permission denied" | Profile owned by `shell` (e.g. copied with `adb push`) | Save again — the app unlinks and retries; see below |
+| Container has no internet | Docker's `FORWARD DROP` | `sudo ./waydroid-host-fix.sh fix` |
+
+```bash
+# crash-looping? any output here is the real problem
+journalctl -u pad2touch.service --since "-15min" | grep -c Traceback
+
+# what mapping did it actually resolve?
+journalctl -u pad2touch.service -n 6 --no-pager | grep bindings
+```
+
+**Never `adb push` into the app's own files directory.** It writes as `shell`, so
+`Android/data/com.koehler.unitemapper/files/unite_profile.json` ends up owned by uid 2000 and the app
+gets `EACCES`. Seed a profile from the app instead; if you must, fix ownership from inside the
+container namespace (Waydroid's `data/media` is not visible from the host):
 
 ```bash
 PID=$(pgrep -x -f "/system/bin/init second_stage")
@@ -129,79 +222,40 @@ sudo nsenter -t "$PID" -m -p --root --wd -- /system/bin/sh -c \
   'chown -R 10156:1078 /data/media/0/Android/data/com.koehler.unitemapper/files'
 ```
 
-The app also self-heals: on a failed write it unlinks the file (it owns the directory) and retries,
-so a foreign-owned file only costs one save.
+## Notes on the virtual device
 
-
-
-Getting a uinput touchscreen recognised by Android needs all three. Each failure has its own
-logcat signature, so check `adb logcat -d | grep -i pad2touch`:
+Getting Android to treat a uinput node as a touchscreen needs three things — each has its own logcat
+signature (`adb logcat -d | grep -i pad2touch`):
 
 | Logcat | Meaning | Fix |
 |---|---|---|
-| `sources=MOUSE` | Treated as a touchpad. Menus accept clicks, games ignore them. | set `INPUT_PROP_DIRECT` (`UI_SET_PROPBIT`) |
-| `Touch device ... did not report support for X or Y axis` | Only `ABS_MT_*` axes declared | also declare `ABS_X` / `ABS_Y` |
-| `Device reconfigured: ... size 1x1` | Axes report `min=max=0` | send `UI_ABS_SETUP` with real ranges per axis |
+| `sources=MOUSE` | Treated as a touchpad | `INPUT_PROP_DIRECT` via `UI_SET_PROPBIT` |
+| `did not report support for X or Y axis` | Only `ABS_MT_*` declared | also declare `ABS_X` / `ABS_Y` |
+| `Device reconfigured: … size 1x1` | Axes report `min=max=0` | `UI_ABS_SETUP` with real ranges |
 
-Injecting the device node into the container has two traps of its own:
+Injecting the node into the container has two traps:
 
-- Use `mknod -m 666` in **one** step. Android's EventHub reacts to `IN_CREATE` and opens the node
-  immediately; a `chmod` afterwards loses the race and the device stays invisible.
-- The container's device cgroup must allow it: `lxc.cgroup2.devices.allow = a` in
-  `/var/lib/waydroid/lxc/waydroid/config`, or Android gets `EPERM`.
+- `mknod -m 666` in **one** step — EventHub reacts to `IN_CREATE` and a later `chmod` loses the race.
+- The device cgroup must allow it (`lxc.cgroup2.devices.allow = a` in
+  `/var/lib/waydroid/lxc/waydroid/config`), or Android gets `EPERM`.
 
----
-
-## Calibrate against the real screen, don't guess
-
-Screenshot a moment where the controls are visible, then read the pixel positions of the
-joystick and buttons off it:
+## Building the app
 
 ```bash
-adb -s 192.168.240.112:5555 shell screencap -p /sdcard/hud.png
-adb -s 192.168.240.112:5555 pull /sdcard/hud.png .
+cd app && ./build.sh          # uses $ANDROID_HOME, $ANDROID_SDK_ROOT or ~/android-sdk
 ```
 
-Guessed coordinates produce the maddening "works in the menu, does nothing in game" symptom,
-because the touches land on empty screen. Two behaviours worth knowing once you have real numbers:
-
-- **Floating joysticks use the touch-down point as the origin.** The mapper lands a finger at the
-  stick centre, then drags outward — a finger that *appears* already displaced reads as a single
-  lurch and no steering.
-- **Movement while pressing buttons** needs the stick state emitted continuously (a ~30 ms
-  heartbeat), not only when the pad reports a change. A pad with no new events must still move
-  the finger.
-
----
-
-## The video gamepad layout shipped as the example
-
-The example config uses the Nintendo Switch layout for Pokémon UNITE:
-
-| Input | Action | Touch target |
-|---|---|---|
-| Left stick | Move | joystick centre (410, 1048), r 120 |
-| A | Basic attack | (2428, 1228) |
-| B | Cancel move — no touch equivalent | disabled |
-| X | Score | (1638, 1218) |
-| Y | Battle items | (2164, 1265) |
-| LB | Move 1 | (2167, 1011) |
-| RB | Move 2 | (1996, 1224) |
-| LT | Unite Move | (2370, 828) |
-| Right stick | Camera pan | drag inside `camera_cx/camera_cy` zone |
-
-Coordinates are for a 2560×1396 Waydroid surface. Every one of them is game- and
-resolution-specific — recalibrate for anything else.
-
----
+aapt2 → javac `--release 11` → d8 → zipalign → apksigner. The script keeps its keystore at
+`~/.unite-mapper-debug.keystore`; a fresh key per build makes updates fail with
+`INSTALL_FAILED_UPDATE_INCOMPATIBLE`.
 
 ## Caveats
 
-- Linux only, Waydroid only. Nothing here is Android-side.
-- Requires root (opens `/dev/uinput`, injects device nodes into the container).
-- The mapper is a heuristic, not an input driver: it cannot emulate rapid tap-chains perfectly,
-  and analog triggers are thresholded.
-- `waydroid-host-fix.sh uninstall` removes what it added; the running container keeps its device
-  nodes until restarted.
+- Linux + Waydroid only. Nothing here runs on a real phone (an app there would need root or ADB).
+- Root on the host for `/dev/uinput` and the container injection.
+- A heuristic, not an input driver: analog triggers are thresholded and rapid tap-chains are not
+  frame-perfect.
+- Screenshots via `adb screencap` cost ~1.5 s, so they can't measure input timing — use the daemon's
+  debug log (`PAD2TOUCH_DEBUG=1` in a systemd drop-in) for that.
 
-MIT licensed.
+MIT licensed. Full guide: [`docs/waydroid-unite-mapper-guide.md`](docs/waydroid-unite-mapper-guide.md)
