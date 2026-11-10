@@ -1,0 +1,7 @@
+[Unit]
+Description=Connect host adb to the Waydroid container
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/waydroid-adb-connect
+TimeoutStartSec=150

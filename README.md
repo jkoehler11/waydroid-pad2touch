@@ -1,11 +1,21 @@
-# pad2touch — use a gamepad with touch-only Android games in Waydroid
+# pad2touch + Unite Mapper — gamepad on touch-only Android games in Waydroid
 
-> **Status: superseded on the author's machine.** He ended up using an existing Android overlay
-> mapper — **Mantis Gamepad Pro** (Play Store) — because it gives a per-game control editor without
-> hand-editing coordinates. This project still makes sense when you can't (or won't) run an overlay
-> app, or when you want deterministic host-side input. Read the rest as the "no-app" route.
+Two pieces that work together:
 
-A virtual touchscreen for Waydroid, driven by a physical controller.
+1. **Unite Mapper** — a tiny Android app where you type the screen coordinates of each control.
+   No menus to learn, no drag-and-drop, no overlay, no accessibility service, no adb pairing.
+2. **pad2touch** — the host daemon that turns your gamepad into touches at those coordinates.
+
+The split exists because of a hard limit: **an Android app cannot read the gamepad while another app
+(the game) holds focus** without root or a paired wireless-debug session. That's why every overlay
+mapper demands ADB activation. This project puts the configurable part in an app and the injection
+on the host, where it always works.
+
+```
+gamepad ──► pad2touch (host, uinput) ──► Pad2Touch touchscreen ──► injected into Waydroid ──► game
+                     ▲
+                     └── /etc/pad2touch.conf ◄── unite-profile-sync ◄── Unite Mapper app (JSON)
+```
 
 Waydroid forwards keyboard and pointer from the host, and it will happily pass a controller
 through as a real joystick — but an Android game that only reads touches never looks at it.
@@ -30,6 +40,10 @@ gamepad ──► pad2touch ──► /dev/uinput (Pad2Touch) ──► injected
 | `waydroid-host-fix.sh` | Fixes the two host problems that make Waydroid look broken: Docker's `FORWARD DROP` killing the container's internet, and gamepad injection. `check` / `fix` / `uninstall`. |
 | `docs/waydroid-no-internet-docker-fix.md` | Write-up of the networking bug, for sharing. |
 | `docs/steamdeck-waydroid-guide.md` | End-to-end Steam Deck walkthrough: installing Waydroid, installing a game, the networking fix, and this controller mapping. |
+| `app/` | **Unite Mapper** — Android app source (one Activity, no dependencies) + `build.sh` (SDK only, no Gradle). |
+| `apk/UniteMapper.apk` | Pre-built app (12 KB). Sideload with `waydroid app install`. |
+| `host/unite-profile-sync` | Pulls the app's profile over adb, rewrites `/etc/pad2touch.conf`, restarts the daemon, re-injects the touch device. |
+| `host/waydroid-adb-connect` | Keeps an adb link from the host to the container, re-established on every Waydroid start. |
 | `systemd/`, `udev/` | Unit and rule files, if you'd rather install by hand than run the script. |
 
 ---
@@ -62,6 +76,45 @@ adb -s 192.168.240.112:5555 shell dumpsys input | grep -A3 Pad2Touch
 Then edit `/etc/pad2touch.conf` and `sudo systemctl restart pad2touch`.
 
 ---
+
+## The Unite Mapper app
+
+Install it and type coordinates — that's the whole workflow:
+
+```bash
+waydroid app install apk/UniteMapper.apk
+```
+
+One row per control (movement stick + radius, A, B, X, Y, LB, LT, camera), each with X and Y fields.
+**Load measured defaults** fills in the values measured off a live Pokémon UNITE match on a
+2560×1396 surface; **Save profile** writes JSON to the app's own storage.
+
+Then the host side, once:
+
+```bash
+sudo install -m 755 host/unite-profile-sync /usr/local/bin/
+sudo cp systemd/unite-profile-sync.service systemd/unite-profile-sync.timer /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now unite-profile-sync.timer
+```
+
+From then on the timer polls every 20 s, and when the profile changes it rewrites
+`/etc/pad2touch.conf`, restarts `pad2touch`, and re-injects the touch device into the container. Save
+in the app, and the controller uses the new coordinates within ~20 seconds.
+
+The app's labels are mapped **by meaning** onto the daemon's Switch-style layout — app *x* (Ice
+Shard) drives LB (move 1), app *lb* (score) drives X, app *b* (Whirlpool) drives RB (move 2) — so the
+form reads the way the game's HUD does rather than the way the config file does.
+
+Build it yourself instead of using the APK: `cd app && ./build.sh` (needs only the Android SDK; no
+Gradle, no AndroidX, no network).
+
+### Why the app doesn't do the mapping itself
+
+It can't, on stock Android. Reading a controller while another app has focus requires either root or
+a paired wireless-debug session, and injecting touches requires an accessibility service or root.
+Both routes are what overlay mappers make you set up — and on Waydroid's GAPPS image wireless
+debugging cannot be enabled at all (no Wi-Fi interface; `svc wifi enable` leaves "Wi-Fi is disabled").
+Keeping the injection on the host sidesteps every one of those requirements.
 
 ## Three things that will bite you
 

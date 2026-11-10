@@ -1,0 +1,10 @@
+[Unit]
+Description=Poll the Unite Mapper app profile
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=20
+Unit=unite-profile-sync.service
+
+[Install]
+WantedBy=timers.target

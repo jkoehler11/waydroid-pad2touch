@@ -1,0 +1,7 @@
+[Unit]
+Description=Apply the Unite Mapper app profile to pad2touch
+After=waydroid-container.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/unite-profile-sync

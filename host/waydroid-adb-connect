@@ -1,0 +1,10 @@
+#!/bin/bash
+# Keep an adb link from this host to the Waydroid container.
+for _ in $(seq 1 60); do
+    if timeout 5 adb connect 192.168.240.112:5555 2>&1 | grep -qi -E "connected|already"; then
+        state=$(timeout 5 adb -s 192.168.240.112:5555 get-state 2>/dev/null | tr -d '\r')
+        [ "$state" = "device" ] && { echo "adb connected: 192.168.240.112:5555"; exit 0; }
+    fi
+    sleep 2
+done
+echo "could not establish adb to waydroid"; exit 1
