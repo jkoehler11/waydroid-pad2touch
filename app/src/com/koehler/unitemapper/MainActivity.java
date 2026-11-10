@@ -318,12 +318,28 @@ public class MainActivity extends Activity {
         }
         sb.append("\n}\n");
 
-        try (FileOutputStream out = new FileOutputStream(profileFile())) {
-            out.write(sb.toString().getBytes(StandardCharsets.UTF_8));
-            Toast.makeText(this, "Saved — sync it on the host", Toast.LENGTH_LONG).show();
-        } catch (Exception e) {
-            Toast.makeText(this, "Save failed: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        if (writeProfile(sb.toString())) {
+            Toast.makeText(this, "Saved — syncs to the host in ~20 s", Toast.LENGTH_LONG).show();
+        } else {
+            Toast.makeText(this, "Save failed — check storage permissions", Toast.LENGTH_LONG).show();
         }
+    }
+
+    /**
+     * Write the profile, deleting first if the existing file is not ours.
+     * A file copied in over adb ends up owned by shell, and overwriting it then
+     * fails with EACCES — but the app owns the directory and can unlink it.
+     */
+    private boolean writeProfile(String content) {
+        for (int attempt = 0; attempt < 2; attempt++) {
+            try (FileOutputStream out = new FileOutputStream(profileFile())) {
+                out.write(content.getBytes(StandardCharsets.UTF_8));
+                return true;
+            } catch (Exception e) {
+                profileFile().delete();
+            }
+        }
+        return false;
     }
 
     private static String text(EditText e) {

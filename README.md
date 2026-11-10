@@ -118,6 +118,22 @@ Keeping the injection on the host sidesteps every one of those requirements.
 
 ## Three things that will bite you
 
+**Never `adb push` into the app's own files directory.** `adb push` writes as `shell`, so
+`Android/data/com.koehler.unitemapper/files/unite_profile.json` ends up owned by uid 2000 — the app
+then gets `EACCES` when it tries to save ("permission denied"). If you need to seed a profile, do it
+from the app, or fix ownership afterwards from inside the container namespace:
+
+```bash
+PID=$(pgrep -x -f "/system/bin/init second_stage")
+sudo nsenter -t "$PID" -m -p --root --wd -- /system/bin/sh -c \
+  'chown -R 10156:1078 /data/media/0/Android/data/com.koehler.unitemapper/files'
+```
+
+The app also self-heals: on a failed write it unlinks the file (it owns the directory) and retries,
+so a foreign-owned file only costs one save.
+
+
+
 Getting a uinput touchscreen recognised by Android needs all three. Each failure has its own
 logcat signature, so check `adb logcat -d | grep -i pad2touch`:
 

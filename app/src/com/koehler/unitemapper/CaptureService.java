@@ -155,10 +155,18 @@ public class CaptureService extends Service {
                     first = false;
                 }
                 sb.append("\n}\n");
-                try (FileOutputStream out = new FileOutputStream(f)) {
-                    out.write(sb.toString().getBytes(StandardCharsets.UTF_8));
+                boolean ok = false;
+                for (int attempt = 0; attempt < 2 && !ok; attempt++) {
+                    try (FileOutputStream out = new FileOutputStream(f)) {
+                        out.write(sb.toString().getBytes(StandardCharsets.UTF_8));
+                        ok = true;
+                    } catch (Exception e) {
+                        f.delete();     // foreign-owned (adb-pushed) file: drop and retry
+                    }
                 }
-                Toast.makeText(this, "Captured " + recorded.size() + " controls", Toast.LENGTH_LONG).show();
+                Toast.makeText(this, ok
+                        ? "Captured " + recorded.size() + " controls"
+                        : "save failed — check storage permissions", Toast.LENGTH_LONG).show();
             } catch (Exception e) {
                 Toast.makeText(this, "save failed: " + e.getMessage(), Toast.LENGTH_LONG).show();
             }
